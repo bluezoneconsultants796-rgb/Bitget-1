@@ -90,6 +90,12 @@
 
 .danger-box { background: rgba(239, 68, 68, 0.04); border: 1px dashed rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 14px 18px; margin-top: 14px; }
 
+/* AML / Compliance threshold field */
+.field-help-text { font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.5; }
+.pkr-prefix-wrapper { position: relative; }
+.pkr-prefix-wrapper .pkr-prefix { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 13px; color: var(--muted); font-family: var(--font-mono); pointer-events: none; }
+.pkr-prefix-wrapper .form-input { padding-left: 32px; }
+
 /* Nav list panel */
 .nav-link-item { display: block; padding: 10px 14px; border-radius: var(--radius-sm); color: var(--muted); font-size: 12.5px; font-weight: 500; text-decoration: none; margin-bottom: 4px; }
 .nav-link-item:hover { background: var(--navy-3); color: var(--white); }
@@ -270,7 +276,30 @@
           </form>
         </div>
 
-        <!-- 3. Backup and database restore box -->
+        <!-- 3. Compliance / AML threshold block -->
+        <div class="section-card" id="complianceForm">
+          <div class="section-title">🛡️ Compliance (AML)</div>
+          <form onsubmit="return false;">
+
+            <div class="form-group">
+              <label class="form-label">CNIC Required Above <span class="subtitle">(PKR, AML threshold)</span></label>
+              <div class="pkr-prefix-wrapper" style="max-width:260px;">
+                <span class="pkr-prefix">₨</span>
+                <input type="number" class="form-input" id="fAmlCnicThreshold" min="0" step="1000" placeholder="1000000">
+              </div>
+              <div class="field-help-text">
+                Transactions with PKR volume above this amount will require the client's CNIC before the transaction can be locked. This applies in New Transaction and helps satisfy AML record-keeping requirements. Default: ₨ 1,000,000.
+              </div>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end;">
+              <button class="btn-primary" onclick="saveComplianceSettings()">🛡️ Save Compliance Settings</button>
+            </div>
+
+          </form>
+        </div>
+
+        <!-- 4. Backup and database restore box -->
         <div class="section-card" id="maintenance">
           <div class="section-title">💾 System Maintenance & Offline Backups</div>
 
@@ -333,6 +362,7 @@
           <div class="pane-title">🛠️ Settings Quick Links</div>
           <a class="nav-link-item active" href="#profileForm">Business Profile</a>
           <a class="nav-link-item" href="#pinForm">Credential Management</a>
+          <a class="nav-link-item" href="#complianceForm">Compliance (AML)</a>
           <a class="nav-link-item" href="#maintenance">Backups & Recovery</a>
           <div style="border-top:1px solid var(--border-soft); margin-top:20px; padding-top:20px; font-size:11.5px; color:var(--muted); line-height:1.6;">
             <strong>DEMS Cryptographic Node v1.2</strong><br>
@@ -389,6 +419,14 @@ async function populateForms() {
   document.getElementById('fNtnNumber').value = _profile.ntnNumber || '';
   document.getElementById('fSessionTimeout').value = _profile.sessionTimeout || 15;
   document.getElementById('fReceiptFooter').value = _profile.receiptFooter || '';
+
+  // AML / Compliance — default to ₨1,000,000 when not yet configured so
+  // existing installs (pre-dating this setting) get the documented default
+  // rather than an empty/zero threshold.
+  document.getElementById('fAmlCnicThreshold').value =
+    (_profile.amlCnicThresholdPkr === undefined || _profile.amlCnicThresholdPkr === null || _profile.amlCnicThresholdPkr === '')
+      ? 1000000
+      : _profile.amlCnicThresholdPkr;
 }
 
 // ── SAVE BUSINESS PROFILE DETAILS ─────────────────────────
@@ -434,6 +472,36 @@ async function saveBusinessProfile() {
     Toast.show('🏢 Profile and SECP config updated successfully!', 'success');
   } catch(e) {
     Toast.show('Error saving profile changes: ' + e.message, 'error');
+  }
+}
+
+// ── SAVE COMPLIANCE (AML) SETTINGS ────────────────────────
+async function saveComplianceSettings() {
+  const raw = document.getElementById('fAmlCnicThreshold').value;
+  const threshold = parseFloat(raw);
+
+  if (raw === '' || isNaN(threshold) || threshold < 0) {
+    Toast.show('AML CNIC threshold must be a positive PKR amount.', 'error');
+    return;
+  }
+
+  // Merge into the existing profile payload — amlCnicThresholdPkr rides
+  // alongside the other non-identity settings (sessionTimeout, receiptFooter)
+  // that already live on the Profile object, so older profiles without this
+  // field are unaffected until explicitly saved here.
+  const payload = {
+    ..._profile,
+    amlCnicThresholdPkr: threshold
+  };
+
+  try {
+    await Profile.save(payload);
+    _profile = payload;
+
+    AuditLog.add('COMPLIANCE_SETTINGS_UPDATED', `AML CNIC threshold set to: ₨ ${threshold.toLocaleString()}`);
+    Toast.show('🛡️ Compliance settings updated successfully!', 'success');
+  } catch(e) {
+    Toast.show('Error saving compliance settings: ' + e.message, 'error');
   }
 }
 

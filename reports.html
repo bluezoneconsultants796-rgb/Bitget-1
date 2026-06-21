@@ -600,6 +600,9 @@
           <div style="font-size:12px; color:var(--muted); line-height:1.6; margin-bottom:16px;">
             This summary aggregates chained transaction volume by calendar month for tax-filing reference. It is generated locally from your tamper-proof ledger and is not an official FBR submission — please verify figures with your accountant before filing.
           </div>
+          <div style="font-size:12px; color:var(--muted); line-height:1.6; margin-bottom:16px; padding:10px 12px; background:rgba(45,212,191,0.06); border:1px solid rgba(45,212,191,0.25); border-radius:8px;">
+            ℹ️ Volume represents gross transaction turnover, while Profit represents actual business income/margin. Depending on the filing requirement, accountants may require one or both figures.
+          </div>
           <div class="form-group" style="max-width:220px; margin-bottom:0;">
             <label class="form-label">Tax Year</label>
             <select class="form-input" id="taxYearSelect" onchange="renderTaxSummaryTab()"></select>

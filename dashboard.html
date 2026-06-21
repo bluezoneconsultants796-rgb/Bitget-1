@@ -125,6 +125,8 @@
 .kpi-card.c-teal   .kpi-val { color: #2DD4BF; }
 .kpi-card.c-teal   .kpi-val.negative { color: #FCA5A5; }
 .kpi-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
+/* void-count footnote under KPI cards */
+.kpi-void-note { font-size: 10px; color: rgba(252,165,165,0.7); margin-top: 5px; font-family: var(--font-mono); }
 
 /* ── CHART SECTION ──────────────────────────────────────── */
 .charts-row { display: grid; grid-template-columns: 1fr 380px; gap: 16px; margin-bottom: 20px; }
@@ -422,6 +424,7 @@
           </div>
           <div class="kpi-val" id="kpiVolume">—</div>
           <div class="kpi-label">Total Volume (PKR)</div>
+          <div class="kpi-void-note" id="kpiVolumeVoidNote" style="display:none;"></div>
         </div>
         <div class="kpi-card c-green">
           <div class="kpi-top">
@@ -430,6 +433,7 @@
           </div>
           <div class="kpi-val" id="kpiTxns">—</div>
           <div class="kpi-label">Transactions</div>
+          <div class="kpi-void-note" id="kpiTxnsVoidNote" style="display:none;"></div>
         </div>
         <div class="kpi-card c-gold">
           <div class="kpi-top">
@@ -454,6 +458,7 @@
           </div>
           <div class="kpi-val" id="kpiProfit">—</div>
           <div class="kpi-label">Total Profit (PKR)</div>
+          <div class="kpi-void-note" id="kpiProfitVoidNote" style="display:none;"></div>
         </div>
       </div>
 
@@ -692,14 +697,38 @@ async function runChainCheck() {
 }
 
 // ── LOAD DATA ─────────────────────────────────────────────
+// _voidedChainIndexes: Set of chain_index values that have been voided by a
+// later correction entry. Built once on load and updated on refresh.
+// Used by effectiveTxns() to exclude both sides of a void pair from totals.
+let _voidedChainIndexes = new Set();
+
 async function loadAllData() {
   try {
     _allTxns = await DB.all(`SELECT * FROM transactions ORDER BY chain_index ASC`);
     _allClients = await DB.all(`SELECT * FROM clients ORDER BY total_volume_pkr DESC`);
+
+    // Build the voided-index set in a single pass over the full ledger.
+    // Any row with is_void=1 carries voids_chain_index pointing at its
+    // original. We record BOTH the original's chain_index (so it is
+    // excluded from effective totals) and the void entry's own chain_index
+    // (so the correction entry itself doesn't double-count its amounts).
+    _voidedChainIndexes = new Set();
+    _allTxns.forEach(t => {
+      if (Number(t.is_void) === 1) {
+        // The correction entry's amounts are a copy of the original's —
+        // counting them would double the error being corrected.
+        _voidedChainIndexes.add(t.chain_index);
+        // The original is superseded.
+        if (t.voids_chain_index != null) {
+          _voidedChainIndexes.add(Number(t.voids_chain_index));
+        }
+      }
+    });
   } catch(e) {
     Toast.show('Error loading data: ' + e.message, 'error');
     _allTxns = [];
     _allClients = [];
+    _voidedChainIndexes = new Set();
   }
 
   const now = new Date().toLocaleDateString('en-PK', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
@@ -723,36 +752,67 @@ function getFilteredTxns() {
   return _allTxns.filter(t => t.timestamp >= cutoffStr);
 }
 
+// effectiveTxns(arr): strips void entries and voided originals from any
+// transaction array so that KPI totals reflect the corrected ledger state.
+// Backward-compatible: rows without is_void simply have is_void=0/null and
+// voids_chain_index=null — they pass through the filter unchanged.
+function effectiveTxns(arr) {
+  return arr.filter(t => !_voidedChainIndexes.has(Number(t.chain_index)));
+}
+
 // ── RENDER DASHBOARD ─────────────────────────────────────
 function renderDashboard() {
-  const txns = getFilteredTxns();
-  renderKPIs(txns);
-  renderVolumeChart(txns);
-  renderDonut(txns);
-  renderTopClients(txns);
+  const txns = getFilteredTxns();               // all rows in period (for heatmap/recent)
+  const eff  = effectiveTxns(txns);             // excludes void pairs (for KPIs/charts)
+  renderKPIs(eff, txns);
+  renderVolumeChart(eff);
+  renderDonut(eff);
+  renderTopClients(eff);
   renderRecentTxns();
   renderHeatmap();
 }
 
 // ── KPI CARDS ─────────────────────────────────────────────
-function renderKPIs(txns) {
+// txns = effective (void-excluded) rows for the period — used for every
+//        financial metric so voided pairs don't distort totals.
+// rawTxns = all rows in the period — used only for the delta comparisons
+//           against the prior period, where the prior period also uses
+//           effectiveTxns(), keeping the comparison apples-to-apples.
+function renderKPIs(txns, rawTxns) {
   const total = txns.reduce((s,t) => s + (parseFloat(t.amount_pkr)||0), 0);
   const avg   = txns.length ? total / txns.length : 0;
 
-  // Total Profit (PKR) — SUM(profit_pkr) over the selected period.
-  // Records with NULL/blank profit_pkr simply don't contribute to the sum
-  // (treated as 0 for aggregation purposes only — they are never coerced
-  // to 0 for display elsewhere, e.g. in the transactions ledger, where a
-  // blank stays "—"). This mirrors how amount_pkr/amount_usdt are summed.
   const profitTxns = txns.filter(t => t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '');
   const totalProfit = profitTxns.reduce((s,t) => s + (parseFloat(t.profit_pkr)||0), 0);
 
   const clientSet = new Set(txns.filter(t => t.client_name).map(t => t.client_name.trim().toLowerCase()));
 
+  // Count how many void-pair rows were excluded in this period for the footnotes
+  const rawCount = rawTxns.length;
+  const effCount = txns.length;
+  const voidExcluded = rawCount - effCount;  // originals + void entries both excluded
+
   setTxt('kpiVolume', fmtPkrBig(total));
-  setTxt('kpiTxns',   txns.length.toLocaleString());
+  setTxt('kpiTxns',   effCount.toLocaleString());
   setTxt('kpiClients', clientSet.size.toLocaleString());
   setTxt('kpiAvg', fmtPkrBig(avg));
+
+  // Void footnotes — only shown when there are void pairs in this period
+  const noteVol  = document.getElementById('kpiVolumeVoidNote');
+  const noteTxns = document.getElementById('kpiTxnsVoidNote');
+  const noteProf = document.getElementById('kpiProfitVoidNote');
+  if (voidExcluded > 0) {
+    const label = `${voidExcluded} void-pair row${voidExcluded !== 1 ? 's' : ''} excluded`;
+    noteVol.textContent  = label;
+    noteTxns.textContent = label;
+    noteVol.style.display  = '';
+    noteTxns.style.display = '';
+    if (noteProf) { noteProf.textContent = label; noteProf.style.display = ''; }
+  } else {
+    noteVol.style.display  = 'none';
+    noteTxns.style.display = 'none';
+    if (noteProf) noteProf.style.display = 'none';
+  }
 
   const profitEl = document.getElementById('kpiProfit');
   if (profitTxns.length === 0) {
@@ -769,8 +829,10 @@ function renderKPIs(txns) {
     const prevEnd    = new Date();
     prevEnd.setDate(prevEnd.getDate() - _period);
     const prevS = prevCutoff.toISOString(), prevE = prevEnd.toISOString();
-    const prev = _allTxns.filter(t => t.timestamp >= prevS && t.timestamp < prevE);
-    const prevVol = prev.reduce((s,t) => s + (parseFloat(t.amount_pkr)||0), 0);
+    // Use effectiveTxns() for the prior period too — apples-to-apples comparison
+    const prevRaw  = _allTxns.filter(t => t.timestamp >= prevS && t.timestamp < prevE);
+    const prev     = effectiveTxns(prevRaw);
+    const prevVol  = prev.reduce((s,t) => s + (parseFloat(t.amount_pkr)||0), 0);
 
     renderDelta('deltaVolume', total, prevVol);
     renderDelta('deltaTxns',   txns.length, prev.length);
@@ -994,6 +1056,8 @@ function renderTopClients(txns) {
 // ── RECENT TRANSACTIONS ───────────────────────────────────
 function renderRecentTxns() {
   const wrap = document.getElementById('recentTxns');
+  // Show most recent 8 entries from the full ledger (all rows visible for
+  // auditability — void entries and originals both appear with a badge).
   const recent = [..._allTxns].reverse().slice(0, 8);
 
   if (!recent.length) {
@@ -1003,15 +1067,26 @@ function renderRecentTxns() {
 
   wrap.innerHTML = recent.map(t => {
     const isBuy = t.txn_type === 'buy';
+    const isVoidEntry   = Number(t.is_void) === 1;
+    const isVoidedOrig  = !isVoidEntry && _voidedChainIndexes.has(Number(t.chain_index));
+
+    // Badge overlay on the receipt line
+    let badgeHtml = '';
+    if (isVoidEntry) {
+      badgeHtml = `<span style="font-size:9px; font-weight:700; color:#5eead4; background:rgba(13,148,136,0.15); border:1px solid rgba(13,148,136,0.3); border-radius:4px; padding:1px 5px; margin-left:4px;">VOID ENTRY</span>`;
+    } else if (isVoidedOrig) {
+      badgeHtml = `<span style="font-size:9px; font-weight:700; color:#fca5a5; background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.25); border-radius:4px; padding:1px 5px; margin-left:4px;">VOIDED</span>`;
+    }
+
     return `
       <div class="activity-item">
-        <div class="activity-icon ${isBuy ? 'ai-buy' : 'ai-sell'}">${isBuy ? '📥' : '📤'}</div>
+        <div class="activity-icon ${isBuy ? 'ai-buy' : 'ai-sell'}">${isVoidEntry ? '↩️' : (isBuy ? '📥' : '📤')}</div>
         <div class="ai-info">
           <div class="ai-name">${escHtml(t.client_name || 'Unknown Client')}</div>
-          <div class="ai-receipt">${escHtml(t.receipt_number)}</div>
+          <div class="ai-receipt">${escHtml(t.receipt_number)}${badgeHtml}</div>
         </div>
         <div class="ai-right">
-          <div class="ai-amount ${isBuy ? 'ai-buy-amt' : 'ai-sell-amt'}">${fmtPkrBig(parseFloat(t.amount_pkr)||0)}</div>
+          <div class="ai-amount ${isBuy ? 'ai-buy-amt' : 'ai-sell-amt'}" style="${(isVoidEntry||isVoidedOrig)?'opacity:0.45;text-decoration:line-through;':''}">${fmtPkrBig(parseFloat(t.amount_pkr)||0)}</div>
           <div class="ai-time">${formatTimeAgo(t.timestamp)}</div>
         </div>
       </div>`;
@@ -1023,8 +1098,9 @@ function renderHeatmap() {
   const grid = document.getElementById('heatmapGrid');
   const days = 84;
 
+  // Count only effective (non-voided) transactions per day
   const counts = {};
-  _allTxns.forEach(t => {
+  effectiveTxns(_allTxns).forEach(t => {
     if (!t.timestamp) return;
     const d = t.timestamp.slice(0,10);
     counts[d] = (counts[d] || 0) + 1;

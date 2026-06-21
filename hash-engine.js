@@ -986,6 +986,197 @@ const HashEngine = (() => {
       } catch (e) {
         return { hasAnchor: false, overdue: true };
       }
+    },
+
+    // ════════════════════════════════════════════════════════
+    //  VOID / CORRECTION WORKFLOW
+    //
+    //  Design invariants:
+    //   1. The original transaction is NEVER modified or deleted.
+    //   2. The correction entry is a full, independent chain member:
+    //      it gets its own chain_index, prev_hash, hash, receipt_number.
+    //   3. is_void = 1 on the correction entry flags it as a void record.
+    //   4. voids_chain_index on the correction entry points at the original.
+    //   5. A void entry can never itself be voided (guard in voidTransaction).
+    //   6. Void entries participate normally in chain verification — the
+    //      chain-integrity checker does not skip them.
+    // ════════════════════════════════════════════════════════
+
+    /**
+     * voidTransaction(originalChainIndex, voidReason)
+     *
+     * Creates a new correction-entry transaction that records the void.
+     * Does NOT modify, update, or delete the original row — ever.
+     *
+     * Returns { success, record, receiptNumber } on success or
+     *         { success: false, error } on failure.
+     */
+    async voidTransaction(originalChainIndex, voidReason) {
+      try {
+        // ── 1. Load the original ────────────────────────────────────────
+        const original = await DB.get(
+          `SELECT * FROM transactions WHERE chain_index = ?`,
+          [originalChainIndex]
+        );
+        if (!original) {
+          return { success: false, error: `No transaction found at chain index #${originalChainIndex}.` };
+        }
+
+        // ── 2. Guard: void entries cannot themselves be voided ──────────
+        if (original.is_void) {
+          return {
+            success: false,
+            error: 'Correction entries cannot be voided. Only original transactions can be corrected.'
+          };
+        }
+
+        // ── 3. Guard: each original can only be voided once ────────────
+        const existingVoid = await DB.get(
+          `SELECT id FROM transactions WHERE voids_chain_index = ? AND is_void = 1`,
+          [originalChainIndex]
+        );
+        if (existingVoid) {
+          return {
+            success: false,
+            error: `Block #${originalChainIndex} has already been voided. To correct further, void the correction entry or contact your compliance officer.`
+          };
+        }
+
+        // ── 4. Build the void record ────────────────────────────────────
+        const timestamp     = getDeviceTimestamp();
+        const receiptNumber = await DB.getNextReceiptNumber();
+        const { prevHash, nextIndex } = await getChainState();
+
+        // The correction entry copies the financial fields from the original
+        // so a reader can immediately see what was corrected without needing
+        // to look up the original separately. All other fields reflect the
+        // correction itself (new timestamp, new chain slot, etc.).
+        const record = {
+          receipt_number  : receiptNumber,
+          order_id        : original.order_id        || '',
+          txn_type        : original.txn_type,           // same direction as original
+          amount_pkr      : original.amount_pkr,
+          exchange_rate   : original.exchange_rate,
+          amount_usdt     : original.amount_usdt,
+          cost_rate       : original.cost_rate    ?? null,
+          profit_pkr      : original.profit_pkr   ?? null,
+          client_name     : original.client_name    || '',
+          client_cnic     : original.client_cnic    || '',
+          bank_name       : original.bank_name      || '',
+          bank_last4      : original.bank_last4     || '',
+          payment_ref     : original.payment_ref    || '',
+          notes           : `VOID REASON: ${(voidReason || '').trim()}`,
+          screenshot_path : '',
+          timestamp       : timestamp,
+          chain_index     : nextIndex,
+          prev_hash       : prevHash,
+          is_locked       : 1,
+          clock_unverified: 0,
+          hash_version    : HASH_VERSION,
+          // Void-specific fields
+          is_void             : 1,
+          voids_chain_index   : originalChainIndex
+        };
+
+        // Hash is computed the same way as any other record (v2 payload).
+        // is_void and voids_chain_index are NOT in the hash payload by design:
+        // adding them would break backward compatibility of the DEMS-v2 field
+        // order. They are stored as metadata columns alongside the hash, not
+        // inside the signed payload — which is exactly how is_locked and
+        // clock_unverified are also handled.
+        const payload = buildHashPayload(record, prevHash);
+        record.hash   = await sha256(payload);
+
+        // ── 5. Insert — no UPDATE or DELETE on transactions, ever ──────
+        await DB.run(
+          `INSERT INTO transactions (
+            receipt_number, order_id, txn_type,
+            amount_pkr, exchange_rate, amount_usdt,
+            cost_rate, profit_pkr,
+            client_name, client_cnic,
+            bank_name, bank_last4, payment_ref,
+            notes, screenshot_path,
+            timestamp, hash, prev_hash, chain_index, is_locked, clock_unverified,
+            hash_version, is_void, voids_chain_index
+          ) VALUES (
+            ?, ?, ?,
+            ?, ?, ?,
+            ?, ?,
+            ?, ?,
+            ?, ?, ?,
+            ?, ?,
+            ?, ?, ?, ?, ?, ?,
+            ?, ?, ?
+          )`,
+          [
+            record.receipt_number,  record.order_id,        record.txn_type,
+            record.amount_pkr,      record.exchange_rate,   record.amount_usdt,
+            record.cost_rate,       record.profit_pkr,
+            record.client_name,     record.client_cnic,
+            record.bank_name,       record.bank_last4,      record.payment_ref,
+            record.notes,           record.screenshot_path,
+            record.timestamp,       record.hash,            record.prev_hash,
+            record.chain_index,     record.is_locked,       record.clock_unverified,
+            record.hash_version,    record.is_void,         record.voids_chain_index
+          ]
+        );
+
+        AuditLog.add(
+          'TRANSACTION_VOIDED',
+          `Void entry: ${record.receipt_number} (Block #${record.chain_index}) | ` +
+          `Voids: Block #${originalChainIndex} (${original.receipt_number}) | ` +
+          `Reason: ${(voidReason || '').trim().substring(0, 120)}`
+        );
+
+        return {
+          success       : true,
+          record        : record,
+          receiptNumber : record.receipt_number
+        };
+
+      } catch (e) {
+        console.error('[HashEngine] voidTransaction error:', e);
+        AuditLog.add('VOID_ERROR', `Void failed for chain_index #${originalChainIndex}: ${e.message}`);
+        return { success: false, error: e.message };
+      }
+    },
+
+    /**
+     * getVoidInfo(chainIndex)
+     *
+     * Checks whether an original transaction has been voided by a correction
+     * entry. Returns:
+     *   { voided: true,  voidChainIndex, voidReceiptNumber, voidReason }
+     *   { voided: false }
+     *
+     * Used by receipt.html to conditionally show the "VOIDED" banner and
+     * by transactions.html to show the "VOIDED — See Block #X" badge.
+     */
+    async getVoidInfo(chainIndex) {
+      try {
+        const row = await DB.get(
+          `SELECT chain_index, receipt_number, notes
+           FROM transactions
+           WHERE voids_chain_index = ? AND is_void = 1
+           LIMIT 1`,
+          [chainIndex]
+        );
+
+        if (!row) return { voided: false };
+
+        // The void reason is stored as "VOID REASON: <text>" in notes.
+        const reason = (row.notes || '').replace(/^VOID REASON:\s*/i, '').trim();
+
+        return {
+          voided          : true,
+          voidChainIndex  : row.chain_index,
+          voidReceiptNumber: row.receipt_number,
+          voidReason      : reason
+        };
+      } catch (e) {
+        console.error('[HashEngine] getVoidInfo error:', e);
+        return { voided: false };
+      }
     }
 
   };

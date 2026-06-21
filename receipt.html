@@ -91,6 +91,23 @@
 .rec-type-badge.sell { color: #d97706; }
 .rec-number { font-family: var(--font-mono); font-size: 14px; font-weight: 600; color: #111827; }
 
+/* ── VOID / CORRECTION WARNING BANNERS ──────────────────── */
+/* Printed on the white receipt-card, so colors are tuned for a light bg
+   (unlike the dark app-shell elsewhere) while staying visually loud. */
+.void-banner {
+  display: none; align-items: flex-start; gap: 12px;
+  background: #fef2f2; border: 2px solid #dc2626; border-radius: var(--radius-md);
+  padding: 14px 18px; margin-bottom: 20px; text-align: left;
+}
+.void-banner.show { display: flex; }
+.void-banner-icon { font-size: 24px; line-height: 1; flex-shrink: 0; }
+.void-banner-title { font-family: var(--font-display); font-size: 14px; font-weight: 800; color: #b91c1c; text-transform: uppercase; letter-spacing: 0.04em; }
+.void-banner-text { font-size: 12px; color: #7f1d1d; line-height: 1.6; margin-top: 4px; }
+.void-banner-link { font-weight: 700; color: #b91c1c; text-decoration: underline; }
+
+/* Side-panel (dark) void notice, mirrors lock-badge styling language */
+.void-badge-dark { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: var(--radius-pill); background: rgba(239,68,68,0.12); color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); font-weight: 600; font-size: 11px; margin-bottom: 18px; }
+
 /* main values row */
 .rec-values-block {
   background: #f9fafb; border: 1px solid #f3f4f6; border-radius: var(--radius-md);
@@ -267,6 +284,31 @@
           </div>
         </div>
 
+        <!-- VOID WARNING — shown when THIS transaction has been voided by a later correction entry -->
+        <div class="void-banner" id="voidedBanner">
+          <div class="void-banner-icon">🚫</div>
+          <div>
+            <div class="void-banner-title">This Transaction Has Been Voided</div>
+            <div class="void-banner-text">
+              This block was marked as voided due to a recorded correction. The original transaction below remains permanently in the chain, unmodified, for audit purposes — it is superseded by
+              <a href="#" class="void-banner-link" id="voidedBannerLink">Block #—</a>.
+            </div>
+          </div>
+        </div>
+
+        <!-- CORRECTION NOTICE — shown when THIS record IS itself a void/correction entry -->
+        <div class="void-banner" id="correctionBanner" style="background:#f0fdfa; border-color:#0d9488;">
+          <div class="void-banner-icon">↩️</div>
+          <div>
+            <div class="void-banner-title" style="color:#0f766e;">Void / Correction Entry</div>
+            <div class="void-banner-text" style="color:#115e59;">
+              This is a correction entry, not a new client transaction. It voids
+              <a href="#" class="void-banner-link" id="correctionBannerLink" style="color:#0f766e;">Block #—</a>
+              and explains why in the notes below.
+            </div>
+          </div>
+        </div>
+
         <div class="rec-title-block">
           <div class="rec-type-badge" id="rTxnTypeBadge">BUY RECEIPT</div>
           <div class="rec-number" id="rReceiptNum">EXC-YYYY-NNNNN</div>
@@ -337,10 +379,15 @@
       <div class="dark-panel">
         <div class="pane-title">⛓ Block Coordinates</div>
         <div class="lock-badge">✓ CRYPTO BLOCK LOCKED</div>
+        <div class="void-badge-dark" id="voidStatusBadgeDark" style="display:none;">🚫 VOID STATUS</div>
 
         <div class="meta-item">
           <div class="meta-lbl">Chain Coordinates</div>
           <div class="meta-val" id="bChainIndex">Block #—</div>
+        </div>
+        <div class="meta-item" id="bVoidRefRow" style="display:none;">
+          <div class="meta-lbl" id="bVoidRefLbl">Void Reference</div>
+          <div class="meta-val" id="bVoidRef">—</div>
         </div>
         <div class="meta-item">
           <div class="meta-lbl">Block Signature (SHA-256)</div>
@@ -383,6 +430,9 @@ let _receiptNumber = null;
 let _txn = null;
 let _verifyLink = null;
 let _qrDataUrl = null;
+// Void status of the CURRENT receipt, populated by loadReceiptAndProfileDetails()
+// so downloadReceiptAsPdf() can stamp the same warning into the PDF export.
+let _voidStatus = { voided: false, voidChainIndex: null }; // "this txn has been voided by..."
 
 // ── INIT ──────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
@@ -486,6 +536,56 @@ async function loadReceiptAndProfileDetails() {
     document.getElementById('bHash').textContent = _txn.hash.toUpperCase();
     document.getElementById('bPrevHash').textContent = _txn.prev_hash.toUpperCase();
 
+    // 4b. Void / Correction status — two independent cases:
+    //   (a) THIS record is itself a void/correction entry (_txn.is_void) —
+    //       show the teal "Correction Entry" notice and link back to the
+    //       original it voids.
+    //   (b) THIS record is a normal transaction that a LATER correction
+    //       entry has voided — look that up via HashEngine.getVoidInfo()
+    //       and show the red "THIS TRANSACTION HAS BEEN VOIDED" banner
+    //       with a link forward to the correction entry.
+    // These are mutually exclusive: a void entry is never itself voidable
+    // (HashEngine.voidTransaction() refuses to void an is_void=1 record),
+    // so at most one of the two banners will ever show.
+    if (_txn.is_void) {
+      const correctionBanner = document.getElementById('correctionBanner');
+      const correctionLink = document.getElementById('correctionBannerLink');
+      correctionBanner.classList.add('show');
+      correctionLink.textContent = `Block #${_txn.voids_chain_index}`;
+
+      // Look up the original's receipt number for a working link
+      try {
+        const original = await DB.get(`SELECT receipt_number FROM transactions WHERE chain_index = ?`, [_txn.voids_chain_index]);
+        if (original) {
+          correctionLink.href = `receipt.html?receipt=${encodeURIComponent(original.receipt_number)}`;
+        }
+      } catch (e) { /* link stays as '#' if lookup fails — non-fatal */ }
+
+      document.getElementById('voidStatusBadgeDark').style.display = 'inline-flex';
+      document.getElementById('voidStatusBadgeDark').textContent = '↩️ CORRECTION ENTRY';
+      document.getElementById('bVoidRefRow').style.display = '';
+      document.getElementById('bVoidRefLbl').textContent = 'Voids Block';
+      document.getElementById('bVoidRef').innerHTML = `<a href="${correctionLink.href}" style="color:var(--blue);">Block #${_txn.voids_chain_index}</a>`;
+
+    } else {
+      const voidInfo = await HashEngine.getVoidInfo(_txn.chain_index);
+      if (voidInfo.voided) {
+        _voidStatus = { voided: true, voidChainIndex: voidInfo.voidChainIndex };
+
+        const voidedBanner = document.getElementById('voidedBanner');
+        const voidedLink = document.getElementById('voidedBannerLink');
+        voidedBanner.classList.add('show');
+        voidedLink.textContent = `Block #${voidInfo.voidChainIndex}`;
+        voidedLink.href = `receipt.html?receipt=${encodeURIComponent(voidInfo.voidReceiptNumber)}`;
+
+        document.getElementById('voidStatusBadgeDark').style.display = 'inline-flex';
+        document.getElementById('voidStatusBadgeDark').textContent = '🚫 VOIDED';
+        document.getElementById('bVoidRefRow').style.display = '';
+        document.getElementById('bVoidRefLbl').textContent = 'Voided By';
+        document.getElementById('bVoidRef').innerHTML = `<a href="${voidedLink.href}" style="color:#fca5a5;">Block #${voidInfo.voidChainIndex}</a>`;
+      }
+    }
+
     // Screenshot attachment embedding
     if (_txn.screenshot_path) {
       document.getElementById('bScreenshotArea').innerHTML = `
@@ -577,6 +677,29 @@ function downloadReceiptAsPdf() {
   doc.setFontSize(10);
   doc.text(`Date: ${new Date(_txn.timestamp).toLocaleString('en-PK', { hour12: true })}`, 195, y, { align: 'right' });
   y += 10;
+
+  // Void / Correction warning — printed prominently in red so a downloaded
+  // PDF of a voided transaction carries the same warning as the on-screen
+  // banner. Mirrors the two mutually-exclusive cases handled on-page.
+  if (_txn.is_void) {
+    doc.setFillColor(240, 253, 250);
+    doc.setDrawColor(13, 148, 136);
+    doc.rect(15, y - 5, 180, 12, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(15, 118, 110);
+    doc.text(`VOID / CORRECTION ENTRY — Voids Block #${_txn.voids_chain_index}`, 105, y + 2, { align: 'center' });
+    y += 14;
+  } else if (_voidStatus.voided) {
+    doc.setFillColor(254, 242, 242);
+    doc.setDrawColor(220, 38, 38);
+    doc.rect(15, y - 5, 180, 12, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(185, 28, 28);
+    doc.text(`THIS TRANSACTION HAS BEEN VOIDED — See Block #${_voidStatus.voidChainIndex}`, 105, y + 2, { align: 'center' });
+    y += 14;
+  }
 
   // Key/value detail rows
   const rows = [

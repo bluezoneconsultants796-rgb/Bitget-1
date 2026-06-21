@@ -152,9 +152,27 @@
 .doc-table tr:last-child td { border-bottom: none; }
 .doc-table td.mono { font-family: var(--font-mono); font-size: 11px; }
 
-/* ── EXPORT CENTER ──────────────────────────────────────── */
-.export-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.export-card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+/* ── VOID STATUS INDICATORS (transaction log & statement tables) ── */
+.void-badge-report {
+  display: inline-block; padding: 1px 6px; border-radius: 4px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em;
+  text-transform: uppercase; white-space: nowrap; margin-left: 5px;
+}
+.void-badge-report.is-void-entry {
+  background: rgba(13,148,136,0.15); color: #5eead4;
+  border: 1px solid rgba(13,148,136,0.3);
+}
+.void-badge-report.is-voided {
+  background: rgba(239,68,68,0.12); color: #fca5a5;
+  border: 1px solid rgba(239,68,68,0.25);
+}
+/* Strikethrough amounts in voided rows */
+.voided-amount { text-decoration: line-through; opacity: 0.45; }
+/* Void-count footnote under metric boxes */
+.metric-void-note {
+  font-size: 10px; color: rgba(252,165,165,0.7); margin-top: 5px;
+  font-family: var(--font-mono);
+}
 
 /* ── PRINT EXECUTIVE PDF STYLES ─────────────────────────── */
 @media print {
@@ -385,6 +403,7 @@
                 <th>Rate</th>
                 <th>Usdt Amount</th>
                 <th>Profit (PKR)</th>
+                <th>Status</th>
               </tr>
             </thead>
             <tbody id="statementTableBody">
@@ -436,6 +455,7 @@
           <div class="metric-box">
             <div class="mb-lbl">Combined Volume</div>
             <div class="mb-val" id="volMetTotal" style="color:var(--white);">₨ 0</div>
+            <div class="metric-void-note" id="volMetVoidNote" style="display:none;"></div>
           </div>
         </div>
 
@@ -511,7 +531,7 @@
               <thead>
                 <tr>
                   <th>Block</th><th>Receipt</th><th>Date</th><th>Type</th><th>Client</th><th>CNIC</th>
-                  <th>PKR</th><th>Rate</th><th>USDT</th><th>Profit (PKR)</th><th>Bank</th><th>Clock</th>
+                  <th>PKR</th><th>Rate</th><th>USDT</th><th>Profit (PKR)</th><th>Bank</th><th>Clock</th><th>Void Status</th>
                 </tr>
               </thead>
               <tbody id="logTableBody"></tbody>
@@ -708,6 +728,36 @@ let _logFiltered = [];
 let _volumeTrendChart = null;
 let _buySellChart = null;
 let _rateChart = null;
+// Set of chain_index values to exclude from financial totals:
+// includes both the voided original AND the correction entry itself,
+// since the correction entry's amounts are a copy of the original.
+// Built in buildVoidSet() after every load.
+let _voidedChainIndexes = new Set();
+
+// ── VOID HELPERS ──────────────────────────────────────────
+function buildVoidSet(txns) {
+  const s = new Set();
+  txns.forEach(t => {
+    if (Number(t.is_void) === 1) {
+      s.add(Number(t.chain_index));
+      if (t.voids_chain_index != null) s.add(Number(t.voids_chain_index));
+    }
+  });
+  return s;
+}
+
+// Returns rows that count toward financial totals.
+// Backward-compatible: older rows have is_void=null/0 and pass through.
+function effectiveTxns(arr) {
+  return arr.filter(t => !_voidedChainIndexes.has(Number(t.chain_index)));
+}
+
+// Void-status label for a single transaction row
+function voidStatusLabel(t) {
+  if (Number(t.is_void) === 1) return 'VOID ENTRY';
+  if (_voidedChainIndexes.has(Number(t.chain_index))) return 'VOIDED';
+  return '';
+}
 
 // ── INIT ──────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
@@ -727,6 +777,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   // Retrieve files ledger pool
   _allTxns = await DB.all('SELECT * FROM transactions ORDER BY chain_index ASC');
+  _voidedChainIndexes = buildVoidSet(_allTxns);
 
   setupSession();
   setupMobileNav();
@@ -813,20 +864,26 @@ function generateReport() {
 }
 
 function calculateReportMetrics() {
+  // _filteredStatementData includes ALL rows in the date range (for full
+  // audit visibility). Effective txns exclude void pairs from sums.
+  const effData = effectiveTxns(_filteredStatementData);
   let volumePkr = 0;
   let totalRate = 0;
-  let count     = _filteredStatementData.length;
+  let count     = effData.length;
 
-  _filteredStatementData.forEach(t => {
+  effData.forEach(t => {
     volumePkr += parseFloat(t.amount_pkr) || 0;
     totalRate += parseFloat(t.exchange_rate) || 0;
   });
 
   const avgRate = count > 0 ? (totalRate / count) : 0;
+  const totalBlocks = _filteredStatementData.length;
+  const voidExcluded = totalBlocks - count;
 
   document.getElementById('metPkr').textContent = `₨ ${Math.round(volumePkr).toLocaleString()}`;
   document.getElementById('metRate').textContent = avgRate.toFixed(3);
-  document.getElementById('metCount').textContent = `${count} Blocks Chained`;
+  document.getElementById('metCount').textContent = `${count} Effective Block${count !== 1 ? 's' : ''}` +
+    (voidExcluded > 0 ? ` (${voidExcluded} void-pair row${voidExcluded !== 1 ? 's' : ''} excluded)` : '');
 }
 
 // ── POPULATE TABLE DOCUMENT ──────────────────────────────
@@ -836,35 +893,52 @@ function populateStatementA4Doc() {
 
   document.getElementById('dStatementDateRange').innerHTML = `Statement Range: <strong>${start}</strong> to <strong>${end}</strong>`;
 
+  // Financial totals are computed only over EFFECTIVE rows — void pairs
+  // are excluded so the statement reflects the corrected ledger state.
+  // However, ALL rows are rendered in the table (with VOIDED / VOID ENTRY
+  // badges) so the full audit trail is visible in the printed document.
+  const effData = effectiveTxns(_filteredStatementData);
   let totalPkr  = 0;
   let totalUsdt = 0;
   let totalRate = 0;
-  let count     = _filteredStatementData.length;
-
-  // Profit total — only sums records that actually have a profit_pkr value;
-  // NULL/blank records (e.g. older transactions, or new ones where the
-  // optional field was left empty) are excluded from the sum rather than
-  // treated as 0, consistent with how blanks are shown elsewhere ("—").
   let totalProfit = 0;
   let profitRecordCount = 0;
 
-  const tbody = document.getElementById('statementTableBody');
-
-  tbody.innerHTML = _filteredStatementData.map(t => {
-    totalPkr += parseFloat(t.amount_pkr) || 0;
-    totalUsdt += parseFloat(t.amount_usdt) || 0;
-    totalRate += parseFloat(t.exchange_rate) || 0;
-
+  effData.forEach(t => {
+    totalPkr  += parseFloat(t.amount_pkr)      || 0;
+    totalUsdt += parseFloat(t.amount_usdt)     || 0;
+    totalRate += parseFloat(t.exchange_rate)   || 0;
     const hasProfit = t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '';
     if (hasProfit) {
       totalProfit += parseFloat(t.profit_pkr) || 0;
       profitRecordCount++;
     }
+  });
 
+  const count   = effData.length;
+  const avgRate = count > 0 ? (totalRate / count) : 0;
+
+  const tbody = document.getElementById('statementTableBody');
+
+  tbody.innerHTML = _filteredStatementData.map(t => {
     const isBuy = t.txn_type === 'buy';
+    const hasProfit = t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '';
+    const isVoidEntry  = Number(t.is_void) === 1;
+    const isVoidedOrig = !isVoidEntry && _voidedChainIndexes.has(Number(t.chain_index));
+    const isAffected   = isVoidEntry || isVoidedOrig;
+
+    // Status cell for statement doc (light background)
+    let statusCell = '';
+    if (isVoidEntry) {
+      statusCell = `<span style="font-size:9px; font-weight:700; color:#0f766e; background:#ccfbf1; border:1px solid #99f6e4; border-radius:3px; padding:1px 5px;">↩ VOID ENTRY</span>`;
+    } else if (isVoidedOrig) {
+      statusCell = `<span style="font-size:9px; font-weight:700; color:#b91c1c; background:#fee2e2; border:1px solid #fca5a5; border-radius:3px; padding:1px 5px;">🚫 VOIDED</span>`;
+    }
+
+    const amtStyle = isAffected ? 'text-decoration:line-through; opacity:0.5;' : '';
 
     return `
-      <tr>
+      <tr style="${isVoidedOrig ? 'background:#fff7f7;' : (isVoidEntry ? 'background:#f0fdfa;' : '')}">
         <td class="mono">#${t.chain_index}</td>
         <td class="mono" style="font-weight:600;">${t.receipt_number}</td>
         <td style="color:${isBuy ? '#059669' : '#d97706'}">${isBuy ? '📥 Buy' : '📤 Sell'}</td>
@@ -872,29 +946,34 @@ function populateStatementA4Doc() {
           <div style="font-weight:600;">${esc(t.client_name)}</div>
           <div style="font-size:10px; color:#6b7280;">${t.client_cnic || 'No CNIC'}</div>
         </td>
-        <td>₨ ${parseFloat(t.amount_pkr).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+        <td style="${amtStyle}">₨ ${parseFloat(t.amount_pkr).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
         <td>${parseFloat(t.exchange_rate).toFixed(3)}</td>
-        <td>${parseFloat(t.amount_usdt).toFixed(2)} USDT</td>
-        <td style="color:${!hasProfit ? '#9ca3af' : (parseFloat(t.profit_pkr) < 0 ? '#dc2626' : '#111827')};">${hasProfit ? '₨ ' + parseFloat(t.profit_pkr).toLocaleString(undefined, {minimumFractionDigits:2}) : '—'}</td>
+        <td style="${amtStyle}">${parseFloat(t.amount_usdt).toFixed(2)} USDT</td>
+        <td style="color:${!hasProfit ? '#9ca3af' : (parseFloat(t.profit_pkr) < 0 ? '#dc2626' : '#111827')}; ${amtStyle}">${hasProfit ? '₨ ' + parseFloat(t.profit_pkr).toLocaleString(undefined, {minimumFractionDigits:2}) : '—'}</td>
+        <td>${statusCell}</td>
       </tr>
     `;
   }).join('');
 
-  const avgRate = count > 0 ? (totalRate / count) : 0;
+  // Summary row counts
+  const totalBlocks   = _filteredStatementData.length;
+  const voidExcluded  = totalBlocks - count;
+  const blockLabel    = `${totalBlocks} Block${totalBlocks !== 1 ? 's' : ''} (${count} effective` +
+    (voidExcluded > 0 ? `, ${voidExcluded} void-pair row${voidExcluded !== 1 ? 's' : ''} excluded from totals` : '') + ')';
 
   // Bind parameters
   document.getElementById('dTotalPkr').textContent = `₨ ${totalPkr.toLocaleString(undefined, {minimumFractionDigits:2})}`;
   document.getElementById('dTotalUsdt').textContent = `${totalUsdt.toFixed(2)} USDT`;
   document.getElementById('dAvgRate').textContent = avgRate.toFixed(3);
-  document.getElementById('dBlockCounts').textContent = `${count} Blocks`;
+  document.getElementById('dBlockCounts').textContent = blockLabel;
   document.getElementById('dTotalProfit').textContent = profitRecordCount > 0
     ? `₨ ${totalProfit.toLocaleString(undefined, {minimumFractionDigits:2})}`
     : '—';
 
   document.getElementById('docDatePrep').textContent = new Date().toLocaleString();
 
-  // Highlight hash of the tip record of this statement
-  const tipRecord = _filteredStatementData[_filteredStatementData.length - 1];
+  // Use tip of effective records for signature hash
+  const tipRecord = effData[effData.length - 1] || _filteredStatementData[_filteredStatementData.length - 1];
   document.getElementById('docSignHash').textContent = tipRecord ? tipRecord.hash.toUpperCase() : 'NONE';
 }
 
@@ -904,9 +983,10 @@ function renderDynamicSvgChart() {
   const w = container.clientWidth || 600;
   const h = 260;
 
-  // Group data by daily records
+  // Group data by daily records — use effectiveTxns so void pairs don't
+  // inflate the chart, while still rendering all rows in the table below.
   const dailyGroups = {};
-  _filteredStatementData.forEach(t => {
+  effectiveTxns(_filteredStatementData).forEach(t => {
     const day = t.timestamp.split('T')[0];
     if (!dailyGroups[day]) {
       dailyGroups[day] = { buy: 0, sell: 0 };
@@ -1007,7 +1087,7 @@ function exportReportAsCsv() {
     return;
   }
 
-  const headers = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC'];
+  const headers = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Void Status'];
   const csvRows = [headers.join(',')];
 
   _filteredStatementData.forEach(t => {
@@ -1022,7 +1102,8 @@ function exportReportAsCsv() {
       (t.cost_rate === null || t.cost_rate === undefined) ? '' : t.cost_rate,
       (t.profit_pkr === null || t.profit_pkr === undefined) ? '' : t.profit_pkr,
       `"${t.client_name.replace(/"/g, '""')}"`,
-      `"${t.client_cnic || ''}"`
+      `"${t.client_cnic || ''}"`,
+      `"${voidStatusLabel(t)}"`
     ];
     csvRows.push(row.join(','));
   });
@@ -1065,16 +1146,30 @@ function renderVolumeReportTab() {
   }
 
   const period = document.getElementById('volPeriodSelect').value;
-  const grouped = groupTxnsByPeriod(_allTxns, period);
+  // Use effective transactions so voided pairs don't inflate volume figures
+  const eff = effectiveTxns(_allTxns);
+  const grouped = groupTxnsByPeriod(eff, period);
 
   let totalBuy = 0, totalSell = 0;
-  _allTxns.forEach(t => {
+  eff.forEach(t => {
     const val = parseFloat(t.amount_pkr) || 0;
     if (t.txn_type === 'buy') totalBuy += val; else totalSell += val;
   });
   document.getElementById('volMetBuy').textContent = `₨ ${Math.round(totalBuy).toLocaleString()}`;
   document.getElementById('volMetSell').textContent = `₨ ${Math.round(totalSell).toLocaleString()}`;
   document.getElementById('volMetTotal').textContent = `₨ ${Math.round(totalBuy + totalSell).toLocaleString()}`;
+
+  // Void footnote
+  const voidExcluded = _allTxns.length - eff.length;
+  const note = document.getElementById('volMetVoidNote');
+  if (note) {
+    if (voidExcluded > 0) {
+      note.textContent = `${voidExcluded} void-pair row${voidExcluded !== 1 ? 's' : ''} excluded`;
+      note.style.display = '';
+    } else {
+      note.style.display = 'none';
+    }
+  }
 
   const labels = grouped.map(g => g.label);
   const buyData = grouped.map(g => g.buy);
@@ -1130,7 +1225,8 @@ function renderRateAnalysisTab() {
     return;
   }
 
-  const sorted = [..._allTxns].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+  // Exclude void pairs so rate averages/min/max reflect real trades only
+  const sorted = effectiveTxns([..._allTxns]).sort((a, b) => a.timestamp.localeCompare(b.timestamp));
   const rates = sorted.map(t => parseFloat(t.exchange_rate) || 0);
 
   if (rates.length === 0) {
@@ -1195,18 +1291,22 @@ function renderTransactionLog() {
     return true;
   });
 
-  document.getElementById('logResultCount').textContent = _logFiltered.length;
-
   // ── Clock-unverified metrics (chain-integrity transparency, requirement #5) ──
   const clockUnverifiedInView = _logFiltered.filter(t => Number(t.clock_unverified) === 1).length;
   const clockUnverifiedTotal  = _allTxns.filter(t => Number(t.clock_unverified) === 1).length;
-  setTxt('logMetTotal', _logFiltered.length);
+  // Effective count (excluding void pairs) for the matching records metric
+  const effInView = effectiveTxns(_logFiltered).length;
+  const voidRowsInView = _logFiltered.length - effInView;
+  setTxt('logMetTotal', voidRowsInView > 0
+    ? `${effInView} effective (${voidRowsInView} void-pair row${voidRowsInView !== 1 ? 's' : ''} shown)`
+    : String(_logFiltered.length));
+  setTxt('logResultCount', _logFiltered.length);
   setTxt('logMetClockUnverified', clockUnverifiedInView);
   setTxt('logMetChainTotal', `${_allTxns.length} (${clockUnverifiedTotal} unverified)`);
 
   const tbody = document.getElementById('logTableBody');
   if (_logFiltered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="12" style="text-align:center; color:var(--muted); padding:30px;">No matching transactions.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13" style="text-align:center; color:var(--muted); padding:30px;">No matching transactions.</td></tr>`;
     return;
   }
 
@@ -1219,20 +1319,36 @@ function renderTransactionLog() {
     const profitCell = hasProfit
       ? `<span style="color:${parseFloat(t.profit_pkr) < 0 ? '#FCA5A5' : 'var(--green)'};">₨ ${parseFloat(t.profit_pkr).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>`
       : `<span style="color:var(--muted);">—</span>`;
+
+    // Void status badge
+    const statusLabel = voidStatusLabel(t);
+    let voidCell = '';
+    if (statusLabel === 'VOID ENTRY') {
+      voidCell = `<span class="void-badge-report is-void-entry">↩ VOID ENTRY</span>`;
+    } else if (statusLabel === 'VOIDED') {
+      voidCell = `<span class="void-badge-report is-voided">🚫 VOIDED</span>`;
+    } else {
+      voidCell = `<span style="color:var(--muted); font-size:11px;">—</span>`;
+    }
+
+    const isAffected = !!statusLabel;
+    const amtStyle = isAffected ? 'class="voided-amount"' : '';
+
     return `
-      <tr>
+      <tr style="${statusLabel === 'VOIDED' ? 'opacity:0.7;' : ''}">
         <td class="mono">#${t.chain_index}</td>
         <td class="mono">${esc(t.receipt_number)}</td>
         <td>${new Date(t.timestamp).toLocaleDateString('en-PK')}</td>
         <td style="color:${isBuy ? 'var(--green)' : 'var(--gold)'}">${isBuy ? '📥 Buy' : '📤 Sell'}</td>
         <td>${esc(t.client_name || 'Walk-in')}</td>
         <td class="mono">${esc(t.client_cnic || '—')}</td>
-        <td>₨ ${parseFloat(t.amount_pkr).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+        <td ${amtStyle}>₨ ${parseFloat(t.amount_pkr).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
         <td>${parseFloat(t.exchange_rate).toFixed(3)}</td>
-        <td>${parseFloat(t.amount_usdt).toFixed(2)}</td>
+        <td ${amtStyle}>${parseFloat(t.amount_usdt).toFixed(2)}</td>
         <td>${profitCell}</td>
         <td>${esc(t.bank_name || '—')}</td>
         <td>${clockCell}</td>
+        <td>${voidCell}</td>
       </tr>
     `;
   }).join('');
@@ -1244,7 +1360,10 @@ function renderTransactionLog() {
 
 function computeClientSummary() {
   const map = {};
-  _allTxns.forEach(t => {
+  // Use effectiveTxns so voided originals and their correction entries
+  // are not counted in per-client volume totals. Backward-compatible:
+  // older rows without void fields are unaffected.
+  effectiveTxns(_allTxns).forEach(t => {
     const key = (t.client_cnic && t.client_cnic.trim()) || `name:${(t.client_name || 'Walk-in').toLowerCase()}`;
     if (!map[key]) {
       map[key] = { name: t.client_name || 'Walk-in Client', cnic: t.client_cnic || '—', count: 0, volumePkr: 0, volumeUsdt: 0, lastDate: t.timestamp };
@@ -1294,7 +1413,10 @@ function renderClientReportTab() {
 
 function computeMonthlyTaxSummary(year) {
   const groups = {};
-  _allTxns.forEach(t => {
+  // Exclude void pairs: voided originals and their correction entries
+  // should not appear in tax/reporting totals. All rows remain in the
+  // full ledger and audit log — only the aggregation uses effective rows.
+  effectiveTxns(_allTxns).forEach(t => {
     const y = t.timestamp.substring(0, 4);
     if (year && y !== String(year)) return;
     const month = t.timestamp.substring(0, 7);
@@ -1322,19 +1444,27 @@ function renderTaxSummaryTab() {
   const year = document.getElementById('taxYearSelect').value || document.getElementById('taxYearSelect').options[0]?.value;
 
   const monthly = computeMonthlyTaxSummary(year);
-  const yearTxns = _allTxns.filter(t => t.timestamp.substring(0, 4) === String(year));
+  // Use effectiveTxns for year-level headline metrics so void pairs
+  // are excluded. computeMonthlyTaxSummary already uses effectiveTxns
+  // internally, so monthly rows are also clean.
+  const yearTxns = effectiveTxns(_allTxns.filter(t => t.timestamp.substring(0, 4) === String(year)));
 
   const totalVol = yearTxns.reduce((a, t) => a + (parseFloat(t.amount_pkr) || 0), 0);
   const uniqueClients = new Set(yearTxns.map(t => t.client_cnic || t.client_name)).size;
 
-  // Year Total Profit — sums only transactions that carry a profit_pkr
-  // value; years/months with no profit data at all render "—" rather
-  // than a misleading ₨ 0.
+  // Year Total Profit — sums only effective transactions that carry a
+  // profit_pkr value; void pairs are already excluded from yearTxns above.
+  // Years/months with no profit data at all render "—" rather than ₨ 0.
   const yearProfitTxns = yearTxns.filter(t => t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '');
   const yearProfit = yearProfitTxns.reduce((a, t) => a + (parseFloat(t.profit_pkr) || 0), 0);
 
+  const rawYearTxns = _allTxns.filter(t => t.timestamp.substring(0, 4) === String(year));
+  const voidExcludedYear = rawYearTxns.length - yearTxns.length;
+
   document.getElementById('taxMetTotal').textContent = `₨ ${Math.round(totalVol).toLocaleString()}`;
-  document.getElementById('taxMetCount').textContent = yearTxns.length;
+  document.getElementById('taxMetCount').textContent = voidExcludedYear > 0
+    ? `${yearTxns.length} (${voidExcludedYear} void-pair row${voidExcludedYear !== 1 ? 's' : ''} excluded)`
+    : String(yearTxns.length);
   document.getElementById('taxMetClients').textContent = uniqueClients;
   document.getElementById('taxMetProfit').textContent = yearProfitTxns.length > 0
     ? `₨ ${Math.round(yearProfit).toLocaleString()}`
@@ -1386,13 +1516,14 @@ function exportStatementAsExcel() {
   }
   if (!ensureXLSX()) return;
 
-  const header = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name', 'Hash'];
+  const header = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name', 'Hash', 'Void Status'];
   const rows = _filteredStatementData.map(t => [
     t.chain_index, t.receipt_number, t.txn_type.toUpperCase(), t.timestamp,
     parseFloat(t.amount_pkr), parseFloat(t.exchange_rate), parseFloat(t.amount_usdt),
     (t.cost_rate === null || t.cost_rate === undefined) ? '' : parseFloat(t.cost_rate),
     (t.profit_pkr === null || t.profit_pkr === undefined) ? '' : parseFloat(t.profit_pkr),
-    t.client_name || '', t.client_cnic || '', t.bank_name || '', t.hash
+    t.client_name || '', t.client_cnic || '', t.bank_name || '', t.hash,
+    voidStatusLabel(t)
   ]);
 
   const ws = XLSX.utils.aoa_to_sheet([header, ...rows]);
@@ -1415,27 +1546,28 @@ function exportFullWorkbookExcel() {
 
   const wb = XLSX.utils.book_new();
 
-  // Sheet 1: All Transactions
-  const txnHeader = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name', 'Bank Last4', 'Payment Ref', 'Order ID', 'Hash', 'Prev Hash'];
+  // Sheet 1: All Transactions (full audit trail — all rows including voids)
+  const txnHeader = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name', 'Bank Last4', 'Payment Ref', 'Order ID', 'Hash', 'Prev Hash', 'Void Status'];
   const txnRows = _allTxns.map(t => [
     t.chain_index, t.receipt_number, t.txn_type.toUpperCase(), t.timestamp,
     parseFloat(t.amount_pkr), parseFloat(t.exchange_rate), parseFloat(t.amount_usdt),
     (t.cost_rate === null || t.cost_rate === undefined) ? '' : parseFloat(t.cost_rate),
     (t.profit_pkr === null || t.profit_pkr === undefined) ? '' : parseFloat(t.profit_pkr),
     t.client_name || '', t.client_cnic || '', t.bank_name || '', t.bank_last4 || '',
-    t.payment_ref || '', t.order_id || '', t.hash, t.prev_hash
+    t.payment_ref || '', t.order_id || '', t.hash, t.prev_hash,
+    voidStatusLabel(t)
   ]);
   const wsTxn = XLSX.utils.aoa_to_sheet([txnHeader, ...txnRows]);
   XLSX.utils.book_append_sheet(wb, wsTxn, 'All Transactions');
 
-  // Sheet 2: Client Summary
+  // Sheet 2: Client Summary — uses effectiveTxns (via computeClientSummary)
   const clients = computeClientSummary();
   const cliHeader = ['Client Name', 'CNIC', 'Transactions', 'Total Volume PKR', 'Total Volume USDT', 'Last Transaction'];
   const cliRows = clients.map(c => [c.name, c.cnic, c.count, Math.round(c.volumePkr), parseFloat(c.volumeUsdt.toFixed(2)), c.lastDate]);
   const wsCli = XLSX.utils.aoa_to_sheet([cliHeader, ...cliRows]);
   XLSX.utils.book_append_sheet(wb, wsCli, 'Client Summary');
 
-  // Sheet 3: Monthly Volume (all years)
+  // Sheet 3: Monthly Volume (all years) — uses effectiveTxns via computeMonthlyTaxSummary
   const monthly = computeMonthlyTaxSummary(null);
   const monHeader = ['Month', 'Buy Volume PKR', 'Sell Volume PKR', 'Total Volume PKR', 'Profit PKR', 'Transactions'];
   const monRows = monthly.map(m => [
@@ -1468,7 +1600,7 @@ function exportTransactionLogCsv() {
   const data = _logFiltered.length ? _logFiltered : _allTxns;
   if (data.length === 0) { Toast.show('No transactions to export.', 'warning'); return; }
 
-  const headers = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name'];
+  const headers = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name', 'Void Status'];
   const csvRows = [headers.join(',')];
   data.forEach(t => {
     csvRows.push([
@@ -1476,7 +1608,8 @@ function exportTransactionLogCsv() {
       t.amount_pkr, t.exchange_rate, t.amount_usdt,
       (t.cost_rate === null || t.cost_rate === undefined) ? '' : t.cost_rate,
       (t.profit_pkr === null || t.profit_pkr === undefined) ? '' : t.profit_pkr,
-      `"${(t.client_name || '').replace(/"/g, '""')}"`, `"${t.client_cnic || ''}"`, `"${(t.bank_name || '').replace(/"/g, '""')}"`
+      `"${(t.client_name || '').replace(/"/g, '""')}"`, `"${t.client_cnic || ''}"`, `"${(t.bank_name || '').replace(/"/g, '""')}"`,
+      `"${voidStatusLabel(t)}"`
     ].join(','));
   });
 
@@ -1505,12 +1638,15 @@ function exportTaxSummaryCsv() {
   const monthly = computeMonthlyTaxSummary(year);
   if (monthly.length === 0) { Toast.show('No tax data to export for this year.', 'warning'); return; }
 
-  const headers = ['Month', 'Buy Volume PKR', 'Sell Volume PKR', 'Total Volume PKR', 'Profit PKR', 'Transactions'];
+  const headers = ['Month', 'Buy Volume PKR', 'Sell Volume PKR', 'Total Volume PKR', 'Profit PKR', 'Transactions', 'Note'];
   const csvRows = [headers.join(',')];
+  // Totals already exclude void pairs (computeMonthlyTaxSummary uses effectiveTxns)
+  const totalVoidExcluded = _allTxns.length - effectiveTxns(_allTxns).length;
   monthly.forEach(m => {
     csvRows.push([
       m.month, Math.round(m.buy), Math.round(m.sell), Math.round(m.buy + m.sell),
-      m.profitCount > 0 ? Math.round(m.profit) : '', m.count
+      m.profitCount > 0 ? Math.round(m.profit) : '', m.count,
+      totalVoidExcluded > 0 ? `"Void pairs excluded from totals"` : ''
     ].join(','));
   });
 
@@ -1522,7 +1658,8 @@ function exportTaxSummaryCsv() {
     Math.round(monthly.reduce((a,m)=>a+m.sell,0)),
     Math.round(monthly.reduce((a,m)=>a+m.buy+m.sell,0)),
     totalProfitCount > 0 ? Math.round(totalProfit) : '',
-    monthly.reduce((a,m)=>a+m.count,0)
+    monthly.reduce((a,m)=>a+m.count,0),
+    totalVoidExcluded > 0 ? `"${totalVoidExcluded} void-pair rows excluded across all months"` : ''
   ].join(','));
 
   downloadCsvBlob(csvRows.join('\n'), `FBR-Tax-Summary-${year}.csv`);

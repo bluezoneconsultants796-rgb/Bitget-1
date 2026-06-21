@@ -124,10 +124,35 @@ const DB = (() => {
     -- ── INTEGRITY: chain_index must be unique ────────────
     CREATE UNIQUE INDEX IF NOT EXISTS idx_txn_chain_unique ON transactions(chain_index);
 
+    -- ── PHASE 01 (scalability): Transaction Attachments ──
+    -- Stores receipt screenshots and image attachments separately
+    -- from the main transactions table so that large base64 blobs
+    -- do not bloat the core transaction rows that the hash engine,
+    -- chain checker, and reports scan on every page load.
+    --
+    -- screenshot_path on transactions continues to hold 'attachment:<id>'
+    -- for new rows, or the legacy data-URI for rows inserted before this
+    -- migration.  attachment_id is a fast FK shortcut (nullable so that
+    -- existing rows and rows without screenshots are unaffected).
+    CREATE TABLE IF NOT EXISTS attachments (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      txn_id      INTEGER NOT NULL,
+      mime_type   TEXT    NOT NULL DEFAULT 'image/jpeg',
+      base64_data TEXT    NOT NULL,
+      uploaded_at TEXT    NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_att_txn ON attachments(txn_id);
+
   `;
 
   // ── PERSISTENCE ─────────────────────────────────────────
-  function saveToStorage() {
+
+  // _pendingSave: timer handle for the trailing debounce.
+  // _saveImmediate: the real synchronous export used by flush paths.
+  let _pendingSave = null;
+
+  function _saveImmediate() {
     if (!_db) return;
     try {
       const data = _db.export();
@@ -140,6 +165,34 @@ const DB = (() => {
     } catch (e) {
       console.error('DB save error:', e);
     }
+  }
+
+  // saveToStorage() — debounced, trailing-edge, 2-second window.
+  // Multiple DB.run() calls fired in quick succession (e.g. inserting a
+  // transaction + its attachment) coalesce into a single export, which
+  // avoids serialising the full SQLite file on every individual INSERT.
+  //
+  // The _pendingSave flag also lets flushStorage() cancel the pending
+  // timer and write synchronously when the page is about to unload.
+  function saveToStorage() {
+    if (_pendingSave !== null) {
+      clearTimeout(_pendingSave);
+    }
+    _pendingSave = setTimeout(() => {
+      _pendingSave = null;
+      _saveImmediate();
+    }, 2000);
+  }
+
+  // flushStorage() — cancels any pending debounce and writes immediately.
+  // Called on beforeunload / visibilitychange-to-hidden to guarantee no
+  // in-flight writes are lost when the tab closes or navigates away.
+  function flushStorage() {
+    if (_pendingSave !== null) {
+      clearTimeout(_pendingSave);
+      _pendingSave = null;
+    }
+    _saveImmediate();
   }
 
   function loadFromStorage() {
@@ -158,11 +211,17 @@ const DB = (() => {
     }
   }
 
-  // Auto-save every 30 seconds
-  setInterval(saveToStorage, 30000);
+  // Auto-save every 30 seconds (belt-and-suspenders on top of the debounce)
+  setInterval(flushStorage, 30000);
 
-  // Save before page unload
-  window.addEventListener('beforeunload', saveToStorage);
+  // Flush before tab closes / navigates away
+  window.addEventListener('beforeunload', flushStorage);
+
+  // Also flush when the tab becomes hidden (mobile background, alt-tab, etc.)
+  // This fires more reliably than beforeunload on mobile browsers.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushStorage();
+  });
 
   return {
 
@@ -262,20 +321,86 @@ const DB = (() => {
         console.warn('[DB] hash_version migration skipped:', e.message);
       }
 
-      saveToStorage();
+      // ── MIGRATION: is_void and voids_chain_index columns ──────────────
+      // Additive columns for the Void/Correction workflow (Phase 03+).
+      // is_void = 1 marks a record as a correction entry (never a new txn).
+      // voids_chain_index points to the chain_index of the original record
+      // that this correction entry supersedes.
+      // Existing rows naturally get is_void = 0 (the default) — they are
+      // regular transactions, not void entries. No hashed field is touched.
+      try {
+        const colsVoid = _db.exec(`PRAGMA table_info(transactions)`);
+        const colNamesVoid = colsVoid.length ? colsVoid[0].values.map(row => row[1]) : [];
+        if (!colNamesVoid.includes('is_void')) {
+          _db.run(`ALTER TABLE transactions ADD COLUMN is_void INTEGER NOT NULL DEFAULT 0`);
+        }
+        if (!colNamesVoid.includes('voids_chain_index')) {
+          _db.run(`ALTER TABLE transactions ADD COLUMN voids_chain_index INTEGER`);
+        }
+      } catch (e) {
+        console.warn('[DB] is_void/voids_chain_index migration skipped:', e.message);
+      }
+
+      // ── MIGRATION: attachments table (scalability phase) ──────────────
+      // The attachments table is declared in SCHEMA above so new databases
+      // get it automatically.  For existing databases that pre-date this
+      // change, CREATE TABLE IF NOT EXISTS in SCHEMA is a no-op during the
+      // bulk _db.run(SCHEMA) call because sql.js re-runs SCHEMA on every
+      // init() — but the table will be created on first schema run if it
+      // doesn't already exist.  This migration block is a belt-and-
+      // suspenders safety net that verifies the table was actually created
+      // (e.g. if the bulk schema run skipped it due to a parse error) and
+      // also adds the attachment_id convenience column to transactions if it
+      // is missing.
+      try {
+        _db.run(`
+          CREATE TABLE IF NOT EXISTS attachments (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            txn_id      INTEGER NOT NULL,
+            mime_type   TEXT    NOT NULL DEFAULT 'image/jpeg',
+            base64_data TEXT    NOT NULL,
+            uploaded_at TEXT    NOT NULL
+          )
+        `);
+        _db.run(`CREATE INDEX IF NOT EXISTS idx_att_txn ON attachments(txn_id)`);
+
+        // attachment_id on transactions — fast FK shortcut, nullable so
+        // existing rows and attachment-free rows are unaffected.
+        const colsAtt = _db.exec(`PRAGMA table_info(transactions)`);
+        const colNamesAtt = colsAtt.length ? colsAtt[0].values.map(row => row[1]) : [];
+        if (!colNamesAtt.includes('attachment_id')) {
+          _db.run(`ALTER TABLE transactions ADD COLUMN attachment_id INTEGER`);
+        }
+      } catch (e) {
+        console.warn('[DB] attachments migration skipped:', e.message);
+      }
+
+      flushStorage();
 
       return _db;
     },
 
     /**
      * run(sql, params?)
-     * Execute INSERT / UPDATE / DELETE / CREATE
+     * Execute INSERT / UPDATE / DELETE / CREATE.
+     * Schedules a debounced saveToStorage() — multiple rapid calls
+     * (e.g. insert transaction + insert attachment) coalesce into one export.
      */
     async run(sql, params = []) {
       if (!_db) await this.init();
       _db.run(sql, params);
-      saveToStorage();
+      saveToStorage();   // debounced — queues a 2-second trailing write
       return { lastInsertRowid: _db.exec('SELECT last_insert_rowid()')[0]?.values[0][0] };
+    },
+
+    /**
+     * flush()
+     * Cancel any pending debounce and write the DB to localStorage right now.
+     * Use after a critical multi-step write sequence (e.g. insert txn + attachment)
+     * when you need the data persisted before navigating away.
+     */
+    flush() {
+      flushStorage();
     },
 
     /**
@@ -322,6 +447,96 @@ const DB = (() => {
       return `EXC-${year}-${String(next).padStart(5, '0')}`;
     },
 
+    // ════════════════════════════════════════════════════════
+    //  ATTACHMENT API
+    //  Stores/retrieves receipt screenshots out-of-band from the
+    //  transactions table so that base64 image blobs do not bloat
+    //  the rows the hash engine and reports read on every load.
+    // ════════════════════════════════════════════════════════
+
+    /**
+     * saveAttachment(txnId, mimeType, base64Data)
+     * Inserts a new row into attachments and returns its id.
+     * The caller is expected to then UPDATE transactions.screenshot_path
+     * to 'attachment:<id>' and transactions.attachment_id to <id>.
+     *
+     * Note: uses the debounced saveToStorage() via DB.run() — call
+     * DB.flush() after the full transaction+attachment sequence when you
+     * need the persist to happen before a page redirect.
+     */
+    async saveAttachment(txnId, mimeType, base64Data) {
+      if (!_db) await this.init();
+      const now = new Date().toISOString();
+      const result = await this.run(
+        `INSERT INTO attachments (txn_id, mime_type, base64_data, uploaded_at)
+         VALUES (?, ?, ?, ?)`,
+        [txnId, mimeType || 'image/jpeg', base64Data, now]
+      );
+      return result.lastInsertRowid;
+    },
+
+    /**
+     * getAttachment(txnId)
+     * Returns the most recent attachment row for a given transaction id,
+     * or null if none exists.  The caller can use the returned base64_data
+     * directly as an <img src=""> value or a data-URI.
+     */
+    async getAttachment(txnId) {
+      if (!_db) await this.init();
+      return await this.get(
+        `SELECT * FROM attachments WHERE txn_id = ? ORDER BY id DESC LIMIT 1`,
+        [txnId]
+      );
+    },
+
+    /**
+     * migrateInlineScreenshot(txnId, screenshotPath)
+     * Legacy compatibility helper.
+     *
+     * Databases created before the attachments table was introduced store
+     * the full base64 data-URI directly in transactions.screenshot_path.
+     * When callers encounter a screenshot_path that starts with 'data:'
+     * they should call this method once to:
+     *   1. Move the blob into the attachments table.
+     *   2. Replace screenshot_path with 'attachment:<id>'.
+     *   3. Set attachment_id for fast lookup.
+     *
+     * This migration is lazy (on first access) so it is safe to call from
+     * any page that renders a screenshot — it is a no-op if the path is
+     * already in 'attachment:<id>' format or is empty.
+     *
+     * Returns: { migrated: bool, attachmentId: int|null, base64Data: string }
+     */
+    async migrateInlineScreenshot(txnId, screenshotPath) {
+      if (!screenshotPath || !screenshotPath.startsWith('data:')) {
+        return { migrated: false, attachmentId: null, base64Data: screenshotPath || '' };
+      }
+
+      try {
+        // Extract MIME type from data-URI header (e.g. 'data:image/jpeg;base64,...')
+        const mimeMatch = screenshotPath.match(/^data:([^;]+);base64,/);
+        const mimeType  = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+
+        const attId = await this.saveAttachment(txnId, mimeType, screenshotPath);
+
+        // UPDATE is permitted here because screenshot_path and attachment_id
+        // are non-hashed metadata columns — they are not part of the fields
+        // covered by the DEMS-v1 or DEMS-v2 hash payload, so rewriting them
+        // cannot break chain verification.
+        _db.run(
+          `UPDATE transactions SET screenshot_path = ?, attachment_id = ? WHERE id = ?`,
+          [`attachment:${attId}`, attId, txnId]
+        );
+        flushStorage();   // immediate — migration is a one-time write
+
+        console.info(`[DB] Migrated inline screenshot for txn ${txnId} → attachment ${attId}`);
+        return { migrated: true, attachmentId: attId, base64Data: screenshotPath };
+      } catch (e) {
+        console.warn('[DB] migrateInlineScreenshot failed:', e.message);
+        return { migrated: false, attachmentId: null, base64Data: screenshotPath };
+      }
+    },
+
     /**
      * export()
      * Returns raw Uint8Array of DB for backup (Phase 08)
@@ -340,7 +555,7 @@ const DB = (() => {
         locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${file}`
       });
       _db = new SQL.Database(data);
-      saveToStorage();
+      flushStorage();   // immediate — backup restore should persist before any redirect
       return true;
     },
 
@@ -399,7 +614,7 @@ const DB = (() => {
       // table names dynamically, so it cannot be redirected at any
       // table other than app_settings.
       _db.run('DELETE FROM app_settings');
-      saveToStorage();
+      flushStorage();   // immediate — config reset should land before any redirect
 
       const survivingCounts = {};
       for (const t of this.PROTECTED_TABLES) {

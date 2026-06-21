@@ -105,6 +105,48 @@
 
 .badge-chain { font-family: var(--font-mono); font-size: 10px; background: var(--navy-3); color: var(--blue); padding: 3px 8px; border-radius: var(--radius-sm); border: 1px solid rgba(14,165,233,0.15); }
 
+/* ── VOID / CORRECTION BADGES ──────────────────────────── */
+.badge-voided {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: var(--radius-pill);
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  background: rgba(239,68,68,0.10); color: #fca5a5;
+  border: 1px solid rgba(239,68,68,0.25); margin-top: 4px; cursor: pointer;
+}
+.badge-void-entry {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: var(--radius-pill);
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  background: rgba(13,148,136,0.10); color: #5eead4;
+  border: 1px solid rgba(13,148,136,0.25); margin-top: 4px;
+}
+
+/* ── VOID MODAL ─────────────────────────────────────────── */
+.void-modal-overlay {
+  display: none; position: fixed; inset: 0;
+  background: rgba(8,15,28,0.85); backdrop-filter: blur(6px);
+  z-index: 500; align-items: center; justify-content: center; padding: 24px;
+}
+.void-modal-overlay.show { display: flex; }
+.void-modal-box {
+  background: var(--navy-2); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 32px; width: 100%; max-width: 520px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.void-modal-title {
+  font-family: var(--font-display); font-size: 17px; font-weight: 700;
+  color: var(--white); margin-bottom: 6px;
+}
+.void-modal-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 22px; line-height: 1.6; }
+.void-modal-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; }
+.void-modal-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.void-modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 8px; }
+.void-warning-box {
+  background: rgba(239,68,68,0.07); border: 1px solid rgba(239,68,68,0.2);
+  border-radius: var(--radius-sm); padding: 10px 14px; margin-bottom: 20px;
+  font-size: 12px; color: #fca5a5; line-height: 1.6;
+}
+
 .meta-subtext { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
 /* Empty state styling */
@@ -287,10 +329,40 @@
   </div><!-- /main area -->
 </div><!-- /app shell -->
 
+<!-- ── VOID / CORRECTION MODAL ──────────────────────────────── -->
+<div class="void-modal-overlay" id="voidModal">
+  <div class="void-modal-box">
+    <div class="void-modal-title">🚫 Mark as Voided — Create Correction Entry</div>
+    <div class="void-modal-sub" id="voidModalSub">
+      Loading transaction details…
+    </div>
+    <div class="void-warning-box">
+      ⚠️ The original transaction will <strong>not</strong> be modified or deleted — it remains permanently in the chain for audit. A new correction block will be appended to the chain referencing this record.
+    </div>
+    <div class="void-modal-field">
+      <label class="void-modal-label">Void Reason <span style="color:#f87171;">*</span> (mandatory)</label>
+      <textarea
+        id="voidReason"
+        class="form-input"
+        rows="4"
+        placeholder="Describe the error being corrected — wrong amount, incorrect client name, wrong exchange rate, duplicate entry, etc."
+        style="resize: vertical; font-size: 13px;"
+      ></textarea>
+    </div>
+    <div class="void-modal-actions">
+      <button class="btn-secondary" onclick="closeVoidModal()">Cancel</button>
+      <button class="btn-primary" id="voidConfirmBtn" onclick="confirmVoid()" style="background: #dc2626; border-color: #dc2626;">
+        🚫 Confirm Void &amp; Create Correction Block
+      </button>
+    </div>
+  </div>
+</div>
+
 <script src="db.js"></script>
 <script src="auth.js"></script>
 <script src="profile.js"></script>
 <script src="audit-log.js"></script>
+<script src="hash-engine.js"></script>
 <script>
 'use strict';
 
@@ -325,8 +397,21 @@ async function loadProfile() {
 async function loadTransactionsLedger() {
   try {
     // Read final immutable blocks ordered by chain index descending
-    _transactions = await DB.all('SELECT * FROM transactions ORDER BY chain_index DESC');
-    
+    const rows = await DB.all('SELECT * FROM transactions ORDER BY chain_index DESC');
+
+    // Enrich each transaction with void info so the table can render badges
+    // without async lookups per-row during render.
+    // For void entries (is_void=1) we already have voids_chain_index.
+    // For normal txns we look up whether a correction entry references them.
+    _transactions = await Promise.all(rows.map(async t => {
+      if (t.is_void) {
+        t._voidInfo = null; // correction entries are not themselves voided
+      } else {
+        t._voidInfo = await HashEngine.getVoidInfo(t.chain_index);
+      }
+      return t;
+    }));
+
     calculateRibbonStats();
     filterLedger();
 
@@ -413,6 +498,28 @@ function filterLedger() {
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true
     });
 
+    // ── Void status badges ───────────────────────────────────────────
+    // Case A: this row IS a correction/void entry
+    let voidBadgeHtml = '';
+    if (t.is_void) {
+      voidBadgeHtml = `<div><span class="badge-void-entry">↩️ CORRECTION — Voids Block #${t.voids_chain_index}</span></div>`;
+    } else if (t._voidInfo && t._voidInfo.voided) {
+      // Case B: this normal transaction HAS been voided by a correction entry
+      const voidReceipt = encodeURIComponent(t._voidInfo.voidReceiptNumber);
+      voidBadgeHtml = `<div>
+        <a href="receipt.html?receipt=${voidReceipt}" class="badge-voided">
+          🚫 VOIDED — See Block #${t._voidInfo.voidChainIndex}
+        </a>
+      </div>`;
+    }
+
+    // ── Action cell ─────────────────────────────────────────────────
+    // Void entries and already-voided transactions cannot be voided again.
+    const canVoid = !t.is_void && !(t._voidInfo && t._voidInfo.voided);
+    const voidBtn = canVoid
+      ? `<button class="btn-secondary btn-sm" onclick="openVoidModal(${t.chain_index})" style="padding:4px 8px; font-size:11px; color:#fca5a5; border-color:rgba(239,68,68,0.3);">🚫 Void</button>`
+      : '';
+
     return `
       <tr>
         <td><span class="badge-chain">#${t.chain_index}</span></td>
@@ -423,13 +530,15 @@ function filterLedger() {
           <div style="font-weight:600;">${esc(t.client_name || 'Walk-in Client')}</div>
           <div class="meta-subtext mono">${esc(t.client_cnic || 'No CNIC register')}</div>
           ${t.bank_name ? `<div class="meta-subtext" style="color:var(--blue);">${esc(t.bank_name)} ${t.bank_last4 ? '(last 4: ' + t.bank_last4 + ')' : ''}</div>` : ''}
+          ${voidBadgeHtml}
         </td>
         <td class="mono font-semibold">₨ ${parseFloat(t.amount_pkr).toLocaleString('en-PK', {minimumFractionDigits:1})}</td>
         <td class="mono" style="color:var(--muted);">${parseFloat(t.exchange_rate).toFixed(3)}</td>
         <td class="mono" style="font-weight:600; color:var(--blue);">${parseFloat(t.amount_usdt).toFixed(2)} USDT</td>
         <td class="mono" style="font-weight:600;${profitColor(t.profit_pkr)}">${fmtProfit(t.profit_pkr)}</td>
-        <td>
+        <td style="white-space:nowrap; display:flex; gap:5px; align-items:center; flex-wrap:wrap;">
           <a class="btn-secondary btn-sm" href="receipt.html?receipt=${encodeURIComponent(t.receipt_number)}" style="padding:4px 8px; font-size:11px;">🔍 View Block</a>
+          ${voidBtn}
         </td>
       </tr>
     `;
@@ -530,6 +639,88 @@ function setupMobileNav() {
   btn.addEventListener('click', () => { sb.classList.toggle('open'); ov.classList.toggle('show'); });
   ov.addEventListener('click', () => { sb.classList.remove('open'); ov.classList.remove('show'); });
 }
+
+// ── VOID / CORRECTION MODAL ───────────────────────────────
+let _voidTargetChainIndex = null;
+
+async function openVoidModal(chainIndex) {
+  const txn = _transactions.find(t => t.chain_index === chainIndex);
+  if (!txn) {
+    Toast.show('Transaction not found.', 'error');
+    return;
+  }
+
+  _voidTargetChainIndex = chainIndex;
+
+  // Populate descriptive sub-line so the operator sees exactly which record
+  // they are about to void before committing.
+  const dateStr = new Date(txn.timestamp).toLocaleString('en-PK', { hour12: true });
+  document.getElementById('voidModalSub').textContent =
+    `Block #${txn.chain_index} | ${txn.receipt_number} | ` +
+    `${txn.txn_type.toUpperCase()} | ` +
+    `₨ ${parseFloat(txn.amount_pkr).toLocaleString()} | ` +
+    `${parseFloat(txn.amount_usdt).toFixed(2)} USDT | ` +
+    `${txn.client_name || 'Walk-in'} | ${dateStr}`;
+
+  document.getElementById('voidReason').value = '';
+  document.getElementById('voidModal').classList.add('show');
+  document.getElementById('voidReason').focus();
+}
+
+function closeVoidModal() {
+  document.getElementById('voidModal').classList.remove('show');
+  _voidTargetChainIndex = null;
+}
+
+async function confirmVoid() {
+  const reason = document.getElementById('voidReason').value.trim();
+  if (!reason) {
+    Toast.show('A void reason is mandatory. Please describe the error being corrected.', 'warning');
+    document.getElementById('voidReason').focus();
+    return;
+  }
+
+  if (_voidTargetChainIndex === null) {
+    Toast.show('No transaction selected for voiding.', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('voidConfirmBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Creating Correction Block…';
+
+  try {
+    const result = await HashEngine.voidTransaction(_voidTargetChainIndex, reason);
+
+    if (!result.success) {
+      Toast.show('Void failed: ' + result.error, 'error');
+      btn.disabled = false;
+      btn.innerHTML = '🚫 Confirm Void &amp; Create Correction Block';
+      return;
+    }
+
+    Toast.show(
+      `✅ Correction block created: ${result.receiptNumber} (Block #${result.record.chain_index})`,
+      'success',
+      5000
+    );
+    closeVoidModal();
+
+    // Reload the full ledger so both the original (now badged VOIDED) and
+    // the new correction entry appear in the table immediately.
+    await loadTransactionsLedger();
+
+  } catch (e) {
+    Toast.show('Unexpected error: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = '🚫 Confirm Void &amp; Create Correction Block';
+  }
+}
+
+// Close void modal on overlay click
+document.getElementById('voidModal').addEventListener('click', function(e) {
+  if (e.target === this) closeVoidModal();
+});
 
 const Toast = {
   show(msg, type='info', dur=3500) {

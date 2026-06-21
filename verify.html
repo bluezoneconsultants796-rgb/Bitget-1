@@ -266,32 +266,41 @@ async function runVerificationScan() {
     document.getElementById('vPrevHash').textContent = txn.prev_hash.toUpperCase();
 
     // ── CRYPTOGRAPHIC VALIDATION TRACE ──
-    // Recalculate block hash securely inside verification page to confirm no in-place modification occurred!
-    const isRecordGenuine = await HashEngine.verifyRecord(txn);
+    // Use the authoritative HashEngine routines (these already log to
+    // verification_log + AuditLog internally, so we don't duplicate that
+    // here). They check TWO things, not just one:
+    //   1. hashValid — this record's own SHA-256 signature matches its content
+    //   2. linkValid — this record's prev_hash correctly chains to the
+    //      previous block's hash
+    // Checking hash alone (the old logic) misses an attacker who rewrites a
+    // single block and recomputes that block's own hash to match — the
+    // record looks internally consistent, but the NEXT block in the chain
+    // still points at the old hash, breaking the link. Checking both closes
+    // that gap.
+    const verification = receiptParam
+      ? await HashEngine.verifyByReceiptNumber(txn.receipt_number)
+      : await HashEngine.verifyByHash(txn.hash);
 
-    if (isRecordGenuine) {
+    if (!verification.found) {
+      // Defensive fallback — shouldn't happen since we already loaded txn above
+      document.getElementById('statusNotFound').style.display = 'flex';
+      return;
+    }
+
+    if (verification.intact) {
       document.getElementById('statusOriginal').style.display = 'flex';
-      
-      // Log original verification in verification_log
-      await DB.run(
-        `INSERT INTO verification_log (receipt_number, verified_at, result, user_agent)
-         VALUES (?, ?, 'ORIGINAL', ?)`,
-        [txn.receipt_number, new Date().toISOString(), navigator.userAgent]
-      );
-
-      // Audit log (fire and forget)
-      AuditLog.add('CLIENT_KYC_VERIFIED', `Verification scan genuine: Receipt ${txn.receipt_number}`);
     } else {
+      // Build copy that explains specifically which check(s) failed
+      const reasons = [];
+      if (!verification.hashValid) {
+        reasons.push('this block\u2019s cryptographic signature no longer matches its stored data');
+      }
+      if (!verification.linkValid) {
+        reasons.push('this block is not correctly linked to the preceding block in the chain');
+      }
+      const descEl = document.querySelector('#statusTampered .plate-desc');
+      descEl.textContent = `CRITICAL COMPLIANCE WARNING: ${reasons.join(', and ')}. Ledger block has been modified or corrupted!`;
       document.getElementById('statusTampered').style.display = 'flex';
-      
-      // Log tampered trace check in verification_log
-      await DB.run(
-        `INSERT INTO verification_log (receipt_number, verified_at, result, user_agent)
-         VALUES (?, ?, 'TAMPERED', ?)`,
-         [txn.receipt_number, new Date().toISOString(), navigator.userAgent]
-      );
-
-      AuditLog.add('CHAIN_TAMPERED', `Mismatch signatures on scan verification of Receipt ${txn.receipt_number}!`);
     }
 
     results.style.display = 'block';

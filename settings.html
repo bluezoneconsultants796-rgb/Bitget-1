@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>System Settings — DEMS</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+/* ── LAYOUT ─────────────────────────────────────────────── */
+.app-shell { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 220px; flex-shrink: 0;
+  background: var(--navy-2);
+  border-right: 1px solid var(--border);
+  padding: 24px 12px;
+  position: fixed; top: 0; left: 0; height: 100vh;
+  overflow-y: auto; z-index: 100;
+  display: flex; flex-direction: column;
+  transition: left 0.25s;
+}
+.sidebar-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 8px 20px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
+}
+.sb-logo { font-size: 22px; color: var(--blue); }
+.sb-name { font-family: var(--font-display); font-size: 15px; font-weight: 700; color: var(--white); line-height: 1.1; }
+.sb-name small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+.nav-group-label {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  padding: 0 8px; margin: 16px 0 6px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 10px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 500; color: var(--muted);
+  text-decoration: none; transition: all 0.15s; margin-bottom: 2px;
+  background: none; border: none; cursor: pointer; width: 100%; text-align: left;
+}
+.nav-item:hover { background: var(--blue-glow); color: var(--white); text-decoration: none; }
+.nav-item.active { background: var(--blue-glow); color: var(--blue); border: 1px solid rgba(14,165,233,0.2); }
+.nav-icon { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
+.sidebar-footer { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); }
+.session-pill { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); padding: 6px 10px; margin-bottom: 4px; }
+.session-pill span { color: var(--gold); font-family: var(--font-mono); }
+
+.main-area { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ── PAGE TOPBAR ────────────────────────────────────────── */
+.page-topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(8,15,28,0.92); backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px; height: 60px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.ptb-left { display: flex; align-items: center; gap: 14px; }
+.ptb-title { font-family: var(--font-display); font-size: 17px; font-weight: 700; color: var(--white); }
+.ptb-sub { font-size: 12px; color: var(--muted); }
+.mobile-menu-btn { display: none; background: none; border: none; color: var(--white); font-size: 20px; cursor: pointer; padding: 4px 8px; }
+
+/* ── SETTINGS LAYOUT ────────────────────────────────────── */
+.page-body { padding: 32px; max-width: 1050px; width: 100%; margin: 0 auto; display: grid; grid-template-columns: 1fr 320px; gap: 24px; }
+
+.section-card {
+  background: var(--navy-2); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 24px 28px; margin-bottom: 24px;
+}
+.section-title {
+  font-family: var(--font-display); font-size: 14px; font-weight: 700; color: var(--blue);
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 20px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border-soft);
+}
+
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.form-row.triple { grid-template-columns: 1fr 1fr 1fr; }
+.form-group { margin-bottom: 16px; }
+.form-group:last-child { margin-bottom: 0; }
+.form-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; display: block; }
+.form-label .req { color: var(--red); margin-left: 2px; }
+
+/* Panel maintenance tools */
+.maint-tool { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--border-soft); }
+.maint-tool:last-child { border-bottom: none; }
+.maint-txt { flex: 1; margin-right: 16px; }
+.maint-name { font-size: 13.5px; font-weight: 600; color: var(--white); }
+.maint-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.danger-box { background: rgba(239, 68, 68, 0.04); border: 1px dashed rgba(239, 68, 68, 0.3); border-radius: var(--radius-md); padding: 14px 18px; margin-top: 14px; }
+
+/* Nav list panel */
+.nav-link-item { display: block; padding: 10px 14px; border-radius: var(--radius-sm); color: var(--muted); font-size: 12.5px; font-weight: 500; text-decoration: none; margin-bottom: 4px; }
+.nav-link-item:hover { background: var(--navy-3); color: var(--white); }
+.nav-link-item.active { background: var(--blue-glow); color: var(--blue); }
+
+/* ── MOBILE OVERLAY ─────────────────────────────────────── */
+.mobile-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 99; }
+.mobile-overlay.show { display: block; }
+
+@media (max-width: 860px) {
+  .page-body { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+  .sidebar { left: -240px; }
+  .sidebar.open { left: 0; }
+  .main-area { margin-left: 0; }
+  .mobile-menu-btn { display: block; }
+  .form-row, .form-row.triple { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="mobile-overlay" id="mobileOverlay"></div>
+
+<!-- toast -->
+<div id="toastContainer" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
+
+<!-- ── APP SHELL ──────────────────────────────────────────── -->
+<div class="app-shell">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="sb-logo" id="sbLogo">⬡</div>
+      <div class="sb-name">
+        <span id="sbBizName">Exchange</span>
+        <small>Management System</small>
+      </div>
+    </div>
+
+    <div class="nav-group-label">Main</div>
+    <a href="dashboard.html" class="nav-item"><span class="nav-icon">📊</span> Dashboard</a>
+    <a href="new-transaction.html" class="nav-item"><span class="nav-icon">➕</span> New Transaction</a>
+    <a href="transactions.html" class="nav-item"><span class="nav-icon">📋</span> All Transactions</a>
+    <a href="clients.html" class="nav-item"><span class="nav-icon">👥</span> Clients KYC</a>
+
+    <div class="nav-group-label">System</div>
+    <a href="chain-integrity.html" class="nav-item"><span class="nav-icon">🔐</span> Chain Integrity</a>
+    <a href="reports.html" class="nav-item"><span class="nav-icon">📑</span> Reports</a>
+    <a href="backup.html" class="nav-item"><span class="nav-icon">💾</span> Backup &amp; Restore</a>
+    <a href="settings.html" class="nav-item active"><span class="nav-icon">⚙️</span> Settings</a>
+    <a href="audit-log-view.html" class="nav-item"><span class="nav-icon">📁</span> Audit Logs</a>
+
+    <div class="sidebar-footer">
+      <div class="session-pill">⏱ Session: <span id="sessionTimer">—</span></div>
+      <button class="nav-item" id="logoutBtn"><span class="nav-icon">🚪</span> Logout</button>
+    </div>
+  </nav>
+
+  <!-- MAIN AREA -->
+  <div class="main-area">
+
+    <!-- TOPBAR -->
+    <div class="page-topbar">
+      <div class="ptb-left">
+        <button class="mobile-menu-btn" id="mobileMenuBtn">☰</button>
+        <div>
+          <div class="ptb-title">⚙️ System Settings</div>
+          <div class="ptb-sub" id="ptbSub">Manage profiles, change credentials & execute overrides</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BODY -->
+    <div class="page-body">
+
+      <!-- LEFT: Forms sections -->
+      <div>
+        
+        <!-- 1. Profile update block -->
+        <div class="section-card">
+          <div class="section-title">🏢 Business Profile Details</div>
+          <form id="profileForm" onsubmit="return false;">
+            
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Business Name <span class="req">*</span></label>
+                <input type="text" class="form-input" id="fBusinessName" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Logo Emoji <span class="req">*</span></label>
+                <select class="form-input" id="fLogoEmoji">
+                  <option>⬡</option><option>🪙</option><option>💵</option>
+                  <option>📈</option><option>🏛️</option><option>💎</option>
+                  <option>💼</option><option>🌌</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row triple">
+              <div class="form-group">
+                <label class="form-label">City <span class="req">*</span></label>
+                <input type="text" class="form-input" id="fCity" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Area <span class="req">*</span></label>
+                <input type="text" class="form-input" id="fArea" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Full Street Address <span class="req">*</span></label>
+                <input type="text" class="form-input" id="fAddress" required>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Contact Landline</label>
+                <input type="text" class="form-input" id="fPhone">
+              </div>
+              <div class="form-group">
+                <label class="form-label">WhatsApp Number <span class="req">*</span></label>
+                <input type="text" class="form-input" id="fWhatsapp" placeholder="+923001234567" required>
+              </div>
+            </div>
+
+            <div class="form-row triple">
+              <div class="form-group">
+                <label class="form-label">SECP Reg Number <span class="req">*</span></label>
+                <input type="text" class="form-input" id="fSecpNumber" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">NTN Code Number</label>
+                <input type="text" class="form-input" id="fNtnNumber">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Session Timeout <span class="subtitle">(minutes)</span></label>
+                <input type="number" class="form-input" id="fSessionTimeout" min="2" max="60" value="15">
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 20px;">
+              <label class="form-label">Default Receipt Footer Text</label>
+              <textarea class="form-input" id="fReceiptFooter" rows="2" placeholder="This block is finalized cryptographically…"></textarea>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end;">
+              <button class="btn-primary" onclick="saveBusinessProfile()">💾 Save Profile Updates</button>
+            </div>
+
+          </form>
+        </div>
+
+        <!-- 2. Credential block -->
+        <div class="section-card">
+          <div class="section-title">🔐 Change Access Security PIN</div>
+          <form id="pinForm" onsubmit="return false;">
+            
+            <div class="form-row triple">
+              <div class="form-group">
+                <label class="form-label">Current PIN <span class="req">*</span></label>
+                <input type="password" class="form-input mono" id="fCurrentPin" placeholder="••••" maxlength="4" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">New PIN <span class="req">*</span></label>
+                <input type="password" class="form-input mono" id="fNewPin" placeholder="••••" maxlength="4" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Confirm New PIN <span class="req">*</span></label>
+                <input type="password" class="form-input mono" id="fConfirmPin" placeholder="••••" maxlength="4" required>
+              </div>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end;">
+              <button class="btn-primary" onclick="saveAccessPin()">🔑 Save Pin Code</button>
+            </div>
+
+          </form>
+        </div>
+
+        <!-- 3. Backup and database restore box -->
+        <div class="section-card" id="maintenance">
+          <div class="section-title">💾 System Maintenance & Offline Backups</div>
+
+          <div class="maint-tool">
+            <div class="maint-txt">
+              <div class="maint-name">Export Ledger Database</div>
+              <div class="maint-desc">Download the entire database state (.db format containing all blocks, clients, and audits) to keep local offline backups.</div>
+            </div>
+            <button class="btn-secondary" onclick="exportDataFile()">📥 Export .db file</button>
+          </div>
+
+          <div class="maint-tool">
+            <div class="maint-txt">
+              <div class="maint-name">Restore Blockchain backup</div>
+              <div class="maint-desc">Upload a previously exported database backup .db file to completely restore state blocks, users and logs.</div>
+            </div>
+            <div style="position:relative;">
+              <button class="btn-secondary">📤 Upload backup</button>
+              <input type="file" id="fImportFile" accept=".db" style="position:absolute; inset:0; opacity:0; cursor:pointer;" onchange="importDataFile(event)">
+            </div>
+          </div>
+
+          <div class="maint-tool" style="border-bottom:none;">
+            <div class="maint-txt">
+              <div class="maint-name" style="color:var(--red);">Clear All local Data (Factory Reset)</div>
+              <div class="maint-desc">Wipes physical localStorage keys (including cryptographic credentials constraints and settings) to reset node completely.</div>
+            </div>
+            <button class="btn-danger" onclick="triggerFactoryReset()">🚨 Wipe Session & DB</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- RIGHT: Side navigation shortcuts info -->
+      <div>
+        <div class="section-card" style="padding: 20px;">
+          <div class="pane-title">🛠️ Settings Quick Links</div>
+          <a class="nav-link-item active" href="#profileForm">Business Profile</a>
+          <a class="nav-link-item" href="#pinForm">Credential Management</a>
+          <a class="nav-link-item" href="#maintenance">Backups & Recovery</a>
+          <div style="border-top:1px solid var(--border-soft); margin-top:20px; padding-top:20px; font-size:11.5px; color:var(--muted); line-height:1.6;">
+            <strong>DEMS Cryptographic Node v1.2</strong><br>
+            All SQLite tables have indexes deployed. Hashing engine runs Web Crypto Native SHA-256 signatures immediately.
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /body -->
+  </div><!-- /main area -->
+</div><!-- /app shell -->
+
+<script src="db.js"></script>
+<script src="auth.js"></script>
+<script src="profile.js"></script>
+<script src="audit-log.js"></script>
+<script>
+'use strict';
+
+// ── STATE ─────────────────────────────────────────────────
+let _profile = null;
+
+// ── INIT ──────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  // Security guard access
+  if (!Auth.requireAuth()) return;
+
+  await DB.init();
+  await populateForms();
+
+  setupSession();
+  setupMobileNav();
+  setupLogout();
+});
+
+// ── POPULATE FORM DETAILS ─────────────────────────────────
+async function populateForms() {
+  _profile = await Profile.get();
+  if (!_profile) return;
+
+  // Sidebar profile
+  document.getElementById('sbLogo').textContent = _profile.logoEmoji || '⬡';
+  document.getElementById('sbBizName').textContent = _profile.businessName || 'ExchangeTable';
+
+  // Form Fields
+  document.getElementById('fBusinessName').value = _profile.businessName || '';
+  document.getElementById('fLogoEmoji').value = _profile.logoEmoji || '⬡';
+  document.getElementById('fCity').value = _profile.city || '';
+  document.getElementById('fArea').value = _profile.area || '';
+  document.getElementById('fAddress').value = _profile.address || '';
+  document.getElementById('fPhone').value = _profile.phone || '';
+  document.getElementById('fWhatsapp').value = _profile.whatsapp || '';
+  document.getElementById('fSecpNumber').value = _profile.secpNumber || '';
+  document.getElementById('fNtnNumber').value = _profile.ntnNumber || '';
+  document.getElementById('fSessionTimeout').value = _profile.sessionTimeout || 15;
+  document.getElementById('fReceiptFooter').value = _profile.receiptFooter || '';
+}
+
+// ── SAVE BUSINESS PROFILE DETAILS ─────────────────────────
+async function saveBusinessProfile() {
+  const name = document.getElementById('fBusinessName').value.trim();
+  const phone = document.getElementById('fPhone').value.trim();
+  const whatsapp = document.getElementById('fWhatsapp').value.trim();
+  const city = document.getElementById('fCity').value.trim();
+  const area = document.getElementById('fArea').value.trim();
+  const address = document.getElementById('fAddress').value.trim();
+  const SECP = document.getElementById('fSecpNumber').value.trim();
+  const NTN = document.getElementById('fNtnNumber').value.trim();
+  const timerSetting = parseInt(document.getElementById('fSessionTimeout').value) || 15;
+  const footerSetting = document.getElementById('fReceiptFooter').value.trim();
+
+  if (!name || !whatsapp || !city || !area || !address || !SECP) {
+    Toast.show('All mandatory fields marked with an asterisk are required.', 'error');
+    return;
+  }
+
+  const payload = {
+    businessName: name,
+    logoEmoji: document.getElementById('fLogoEmoji').value,
+    city: city,
+    area: area,
+    address: address,
+    phone: phone,
+    whatsapp: whatsapp,
+    secpNumber: SECP,
+    ntnNumber: NTN,
+    sessionTimeout: timerSetting,
+    receiptFooter: footerSetting
+  };
+
+  try {
+    await Profile.save(payload);
+    
+    // update sidebar live
+    document.getElementById('sbLogo').textContent = payload.logoEmoji;
+    document.getElementById('sbBizName').textContent = payload.businessName;
+
+    AuditLog.add('PROFILE_UPDATED', `Business Name: ${name} | SECP: ${SECP}`);
+    Toast.show('🏢 Profile and SECP config updated successfully!', 'success');
+  } catch(e) {
+    Toast.show('Error saving profile changes: ' + e.message, 'error');
+  }
+}
+
+// ── CHANGE CREDENTIAL PIN ─────────────────────────────────
+async function saveAccessPin() {
+  const curr = document.getElementById('fCurrentPin').value;
+  const pin1 = document.getElementById('fNewPin').value;
+  const pin2 = document.getElementById('fConfirmPin').value;
+
+  if (pin1.length !== 4 || !/^\d{4}$/.test(pin1)) {
+    Toast.show('New PIN code must be exactly 4 digits.', 'error');
+    return;
+  }
+  if (pin1 !== pin2) {
+    Toast.show('Confirm PIN does not match.', 'error');
+    return;
+  }
+
+  try {
+    // Invoke Auth changePin
+    const success = await Auth.changePin(curr, pin1);
+    
+    if (success) {
+      document.getElementById('fCurrentPin').value = '';
+      document.getElementById('fNewPin').value = '';
+      document.getElementById('fConfirmPin').value = '';
+
+      Toast.show('🔑 PIN code changed successfully!', 'success');
+    } else {
+      Toast.show('Incorrect current PIN credential. Access rejected.', 'error');
+    }
+  } catch(e) {
+    Toast.show('System PIN transition error: ' + e.message, 'error');
+  }
+}
+
+// ── DATABASE OFFLINE BACKUP ──────────────────────────────
+async function exportDataFile() {
+  try {
+    // Export RAW uint8Array of sql DB
+    const bytes = DB.exportRaw();
+    if (!bytes) {
+      Toast.show('Database not initialized correctly or empty.', 'error');
+      return;
+    }
+
+    const blob = new Blob([bytes], {type: 'application/octet-stream'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `DEMS-Backup-${new Date().toISOString().split('T')[0]}.db`;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    AuditLog.add('DATABASE_EXPORTED', `Sqlite database offline backup exported raw.`);
+    Toast.show('📥 Offline SQLite backup file downloaded successfully!', 'success');
+  } catch(e) {
+    Toast.show('Database export crash: ' + e.message, 'error');
+  }
+}
+
+// ── DATABASE OFFLINE RESTORE ──
+async function importDataFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      const buffer = e.target.result;
+      const bytes = new Uint8Array(buffer);
+
+      const confirmRestore = confirm('⚠️ CRITICAL WARNING! ⚠️\n\nRestoring this backup will completely OVERWRITE your active ledger, audit log, clients and profiles!\n\nAre you sure you want to load this external file?');
+      if (!confirmRestore) return;
+
+      const importSuccess = await DB.importRaw(bytes);
+      
+      if (importSuccess) {
+        // Log audit event immediately
+        await AuditLog.add('DATABASE_STORED_BACKUP', `Successfully loaded DB file: ${file.name}`);
+        
+        Toast.show('⚡ Database imported! Reloading system...', 'success');
+        
+        // Short delay to let DB write, then reload
+        setTimeout(() => {
+          localStorage.removeItem('dems_session'); // clear active session to re-force login
+          window.location.href = 'index.html';
+        }, 1200);
+      }
+    } catch(err) {
+      Toast.show('Backup Import Failure: ' + err.message, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// ── FACTORY RESET NODE ──
+function triggerFactoryReset() {
+  const promptValue = prompt('🚨 ADVANCED ACTION REQUIRED! 🚨\n\nThis will completely wipe out the system, erasing your database, block receipts, credentials, and audits. This is permanent.\n\nTo continue, type exactly: RESET ALL');
+  if (promptValue !== 'RESET ALL') {
+    Toast.show('Wipe canceled. Override passcodes misaligned.', 'info');
+    return;
+  }
+
+  // Clear localStorage keys
+  localStorage.removeItem('dems_sqlite_db');
+  localStorage.removeItem('dems_business_profile');
+  localStorage.removeItem('dems_session');
+  localStorage.removeItem('dems_lockout_attempts');
+  localStorage.removeItem('dems_credentials_pin_hash');
+  localStorage.removeItem('dems_credentials_password_hash');
+
+  alert('⚡ Node completely reset. All local storage is purged. Redirecting to onboarding setup.');
+  window.location.href = 'index.html';
+}
+
+// ── CORE UTILS ───────────────────────────────────────────
+function setTxt(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
+
+function setupSession() {
+  function tick() {
+    try {
+      const raw = localStorage.getItem('dems_session');
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      const left = Math.max(0, Math.floor((s.expiresAt - Date.now()) / 1000));
+      const m = Math.floor(left / 60), sec = left % 60;
+      setTxt('sessionTimer', m + ':' + String(sec).padStart(2 ,'0'));
+    } catch(e) {}
+  }
+  tick(); setInterval(tick, 1000);
+}
+
+function setupLogout() {
+  document.getElementById('logoutBtn').addEventListener('click', () => { Auth.logout(); });
+}
+
+function setupMobileNav() {
+  const btn = document.getElementById('mobileMenuBtn');
+  const sb  = document.getElementById('sidebar');
+  const ov  = document.getElementById('mobileOverlay');
+  if (!btn) return;
+  btn.addEventListener('click', () => { sb.classList.toggle('open'); ov.classList.toggle('show'); });
+  ov.addEventListener('click', () => { sb.classList.remove('open'); ov.classList.remove('show'); });
+}
+
+const Toast = {
+  show(msg, type='info', dur=3500) {
+    const c = document.getElementById('toastContainer');
+    const t = document.createElement('div');
+    const icons = { success:'✅', error:'❌', info:'ℹ️', warning:'⚠️' };
+    t.className = `toast ${type}`;
+    t.innerHTML = `<span>${icons[type]||'ℹ️'}</span><span>${msg}</span>`;
+    c.appendChild(t);
+    setTimeout(() => { t.style.opacity='0'; t.style.transition='opacity 0.3s'; setTimeout(()=>t.remove(),300); }, dur);
+  }
+};
+</script>
+</body>
+</html>

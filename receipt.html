@@ -117,7 +117,8 @@
 
 /* QR block */
 .rec-qr-row { display: flex; align-items: center; justify-content: center; gap: 18px; margin-bottom: 18px; text-align: left; background: #fafafa; padding: 14px 20px; border-radius: var(--radius-md); border: 1px solid #f0f0f0; }
-.rec-qr-img { width: 90px; height: 90px; border: 1px solid #e5e7eb; background: #fff; padding: 3px; border-radius: var(--radius-xs); }
+.rec-qr-img { width: 90px; height: 90px; border: 1px solid #e5e7eb; background: #fff; padding: 3px; border-radius: var(--radius-xs); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.rec-qr-img img { display: none; } /* qrcode.js fallback <img> hidden; canvas is the visible render */
 .rec-qr-info { flex: 1; }
 .rec-qr-title { font-family: var(--font-display); font-size: 11.5px; font-weight: 700; color: #111827; margin-bottom: 3px; }
 .rec-qr-link { font-family: var(--font-mono); font-size: 10px; color: #0284c7; word-break: break-all; display: block; margin-top: 4px; text-decoration: none; }
@@ -237,7 +238,7 @@
       <div class="ptb-right" style="display:flex; gap:10px;">
         <!-- Resolved Bug 4: Unique button ids, no duplicates -->
         <button class="btn-secondary btn-sm" id="btnPrintReceipt" onclick="window.print()">🖨️ Print Receipt (80mm)</button>
-        <button class="btn-primary btn-sm" id="btnExportPdf" onclick="downloadReceiptAsTxt()">📥 Download Text Transcript</button>
+        <button class="btn-primary btn-sm" id="btnExportPdf" onclick="downloadReceiptAsPdf()">📥 Download PDF Receipt</button>
       </div>
     </div>
 
@@ -317,7 +318,7 @@
 
         <!-- QR Row -->
         <div class="rec-qr-row">
-          <img src="" class="rec-qr-img" id="rQrImage" alt="QR Link">
+          <div class="rec-qr-img" id="rQrImage"></div>
           <div class="rec-qr-info">
             <div class="rec-qr-title">🔐 Secure Blockchain Check</div>
             <div style="font-size:10px; color:#4b5563; line-height:1.4;">Scan this code with compliance instruments to verify receipt origin directly against the tamper-proof sequence.</div>
@@ -372,12 +373,16 @@
 <script src="profile.js"></script>
 <script src="audit-log.js"></script>
 <script src="hash-engine.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 'use strict';
 
 // ── STATE ─────────────────────────────────────────────────
 let _receiptNumber = null;
 let _txn = null;
+let _verifyLink = null;
+let _qrDataUrl = null;
 
 // ── INIT ──────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
@@ -493,17 +498,30 @@ async function loadReceiptAndProfileDetails() {
 
     // 5. Dynamic QR Link calculation
     // Parsed from window.location.origin dynamically to avoid localhost hardcoding.
-    constDeployedBase = window.location.origin;
-    const verifyLink = `${constDeployedBase}/verify.html?receipt=${encodeURIComponent(_txn.receipt_number)}`;
-    
+    const deployedBase = window.location.origin;
+    const verifyLink = `${deployedBase}/verify.html?receipt=${encodeURIComponent(_txn.receipt_number)}`;
+    _verifyLink = verifyLink;
+
     // Set text link values
     const linkEl = document.getElementById('rQrLinkText');
     linkEl.href = verifyLink;
     linkEl.innerHTML = `${window.location.host}/verify.html?receipt=${_txn.receipt_number.substring(0,12)}…`;
 
-    // Dynamic QR API drawing with alignment
-    const qrApi = `https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(verifyLink)}&color=0e1a2e&margin=2`;
-    document.getElementById('rQrImage').src = qrApi;
+    // Offline client-side QR generation (no external network call).
+    // Encodes the EXACT same verifyLink used by the text link above.
+    const qrContainer = document.getElementById('rQrImage');
+    qrContainer.innerHTML = '';
+    new QRCode(qrContainer, {
+      text: verifyLink,
+      width: 84,
+      height: 84,
+      colorDark: '#0e1a2e',
+      colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+    // Capture a PNG data URL of the generated QR for reuse in the PDF export.
+    const qrCanvas = qrContainer.querySelector('canvas');
+    _qrDataUrl = qrCanvas ? qrCanvas.toDataURL('image/png') : null;
 
     // Track write page metrics audit
     AuditLog.add('RECEIPT_VIEWED', `Receipt: ${_txn.receipt_number}`);
@@ -513,48 +531,118 @@ async function loadReceiptAndProfileDetails() {
   }
 }
 
-// ── DOWNLOAD RECEIPT TRANSCRIPT ──────────────────────────
-function downloadReceiptAsTxt() {
+// ── DOWNLOAD RECEIPT AS PDF ───────────────────────────────
+function downloadReceiptAsPdf() {
   if (!_txn) return;
-  const logo = document.getElementById('sbLogo').textContent;
-  const biz = document.getElementById('rBizName').textContent;
 
-  const content = `
-=========================================
-${logo} ${biz.toUpperCase()}
-DEMS TAMPER-PROOF EXCHANGE RECEIPT
-=========================================
-Receipt: ${_txn.receipt_number}
-Date   : ${new Date(_txn.timestamp).toLocaleString()}
-Type   : ${_txn.txn_type.toUpperCase()}
------------------------------------------
-PKR Amount   : ₨ ${_txn.amount_pkr.toLocaleString()}
-Rate         : ${_txn.exchange_rate}
-USDT Amount  : ${_txn.amount_usdt} USDT
------------------------------------------
-Client Name  : ${_txn.client_name || 'Walk-in'}
-CNIC         : ${_txn.client_cnic || '—'}
-Bank Name    : ${_txn.bank_name || '—'}
-Bank Last 4  : ${_txn.bank_last4 || '—'}
------------------------------------------
-Bitget Order : ${_txn.order_id || '—'}
-Payment Ref  : ${_txn.payment_ref || '—'}
------------------------------------------
-COORDINATES  : Block #${_txn.chain_index}
-HASH SIGN    : ${_txn.hash}
-PREV HASH    : ${_txn.prev_hash}
-SYSTEM LOCK  : Cryptographically Chained (DEMS-v1)
-=========================================
-  `;
+  if (!window.jspdf || !window.jspdf.jsPDF) {
+    Toast.show('PDF engine still loading — please try again in a moment.', 'error');
+    return;
+  }
 
-  const blob = new Blob([content], {type: 'text/plain;charset=utf-8;'});
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `Receipt-${_txn.receipt_number}.txt`;
-  link.click();
-  URL.revokeObjectURL(url);
-  Toast.show('📥 Text receipt transcript downloaded.', 'success');
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+
+  const logo = document.getElementById('rBizLogo').textContent;
+  const biz  = document.getElementById('rBizName').textContent;
+  const sub  = document.getElementById('rBizSub').textContent;
+  const secp = document.getElementById('rBizReg').textContent;
+  const ntn  = document.getElementById('rBizNtn').textContent;
+
+  let y = 20;
+
+  // Business header
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.text(`${logo}  ${biz}`, 105, y, { align: 'center' });
+  y += 7;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.setTextColor(110);
+  doc.text(sub, 105, y, { align: 'center' });
+  y += 5;
+  doc.text(`${secp}    |    ${ntn}`, 105, y, { align: 'center' });
+  y += 8;
+
+  doc.setDrawColor(200);
+  doc.line(15, y, 195, y);
+  y += 9;
+
+  // Receipt number / date
+  doc.setTextColor(20);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text(`Receipt: ${_txn.receipt_number}`, 15, y);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text(`Date: ${new Date(_txn.timestamp).toLocaleString('en-PK', { hour12: true })}`, 195, y, { align: 'right' });
+  y += 10;
+
+  // Key/value detail rows
+  const rows = [
+    ['Transaction Type', _txn.txn_type === 'buy' ? 'BUY (Client Sells USDT)' : 'SELL (Client Buys USDT)'],
+    ['Client Name', _txn.client_name || 'Walk-in Client'],
+    ['Client CNIC', _txn.client_cnic || '—'],
+    ['Amount (PKR)', `Rs ${parseFloat(_txn.amount_pkr).toLocaleString('en-PK', { minimumFractionDigits: 2 })}`],
+    ['Exchange Rate', parseFloat(_txn.exchange_rate).toFixed(3)],
+    ['Amount (USDT)', `${parseFloat(_txn.amount_usdt).toFixed(2)} USDT`],
+    ['Bank Reference', _txn.bank_name ? `${_txn.bank_name}${_txn.bank_last4 ? ' (last 4: ' + _txn.bank_last4 + ')' : ''}` : '—'],
+    ['Payment Ref', _txn.payment_ref || '—'],
+    ['Bitget Order ID', _txn.order_id || '—']
+  ];
+
+  doc.setFontSize(10.5);
+  rows.forEach(([label, value]) => {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(110);
+    doc.text(label, 15, y);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(20);
+    doc.text(String(value), 195, y, { align: 'right' });
+    y += 7;
+  });
+
+  y += 3;
+  doc.setDrawColor(200);
+  doc.line(15, y, 195, y);
+  y += 9;
+
+  // Full SHA-256 hash
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(10);
+  doc.setTextColor(20);
+  doc.text('Block Hash (SHA-256):', 15, y);
+  y += 5;
+  doc.setFont('courier', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(16, 150, 100);
+  doc.text(_txn.hash.toUpperCase(), 15, y, { maxWidth: 180 });
+  y += 12;
+
+  // QR code (same verify URL as the on-page text link)
+  if (_qrDataUrl) {
+    doc.addImage(_qrDataUrl, 'PNG', 15, y, 30, 30);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8.5);
+    doc.setTextColor(110);
+    doc.text('Scan to verify this receipt against the tamper-proof chain.', 50, y + 8, { maxWidth: 130 });
+    if (_verifyLink) {
+      doc.setFont('courier', 'normal');
+      doc.setFontSize(7.5);
+      doc.setTextColor(2, 132, 199);
+      doc.text(_verifyLink, 50, y + 16, { maxWidth: 130 });
+    }
+    y += 36;
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(150);
+  doc.text('POWERED BY DEMS BLOCKCHAIN CORE — Cryptographically Chained (DEMS-v1)', 105, 285, { align: 'center' });
+
+  doc.save(`Receipt-${_txn.receipt_number}.pdf`);
+  AuditLog.add('RECEIPT_PDF_DOWNLOADED', `Receipt: ${_txn.receipt_number}`);
+  Toast.show('📥 PDF receipt downloaded.', 'success');
 }
 
 // ── SCREENSHOT VIEW MODAL LAYOUT ─────────────────────────

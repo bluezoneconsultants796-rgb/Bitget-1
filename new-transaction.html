@@ -192,6 +192,22 @@
 .field-error-text { font-size: 11px; color: var(--red); margin-top: 4px; display: none; }
 .field-error-text.show { display: block; }
 
+/* ── PROFIT TRACKING BOX ────────────────────────────────── */
+.profit-box {
+  background: var(--navy-3); border: 1.5px dashed var(--border);
+  border-radius: var(--radius-md); padding: 18px; margin-top: 16px;
+}
+.profit-box-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.profit-box-title { font-family: var(--font-display); font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.profit-badge { font-size: 9.5px; font-weight: 600; background: rgba(245,158,11,0.12); color: var(--gold); padding: 2px 8px; border-radius: var(--radius-pill); }
+.profit-suggest {
+  font-size: 11.5px; color: var(--muted); margin-top: 6px;
+  background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.15);
+  border-radius: var(--radius-sm); padding: 7px 10px; display: none;
+}
+.profit-suggest.show { display: block; }
+.profit-suggest strong { color: var(--green); font-family: var(--font-mono); }
+
 /* ── MOBILE OVERLAY ─────────────────────────────────────── */
 .mobile-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 99; }
 .mobile-overlay.show { display: block; }
@@ -313,6 +329,28 @@
                 <div class="form-group" style="margin-bottom:0;">
                   <label class="form-label">Payment Ref / Bank ID <span class="subtitle">(optional)</span></label>
                   <input type="text" class="form-input" id="fPaymentRef" placeholder="e.g. M-84293845239">
+                </div>
+              </div>
+
+              <!-- Profit Tracking (optional) -->
+              <div class="profit-box">
+                <div class="profit-box-header">
+                  <div class="profit-box-title">📈 Profit / Margin Tracking</div>
+                  <div class="profit-badge">Optional — internal only</div>
+                </div>
+                <div class="double-grid" style="margin-bottom:0;">
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Cost / Market Rate <span class="subtitle">(PKR per USDT, optional)</span></label>
+                    <input type="number" step="any" min="0" class="form-input mono" id="fCostRate" placeholder="e.g. 278.50">
+                  </div>
+                  <div class="form-group" style="margin-bottom:0;">
+                    <label class="form-label">Profit <span class="subtitle">(PKR, optional — editable)</span></label>
+                    <input type="number" step="any" class="form-input mono" id="fProfitPkr" placeholder="Auto-suggested or enter manually">
+                    <div class="profit-suggest" id="profitSuggest">
+                      Suggested: <strong id="profitSuggestVal">—</strong> PKR
+                      <span style="color:var(--muted);"> — you can overwrite this freely</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -490,6 +528,8 @@ function setTxnType(t) {
   document.getElementById('btnTypeBuy').classList.toggle('active', t === 'buy');
   document.getElementById('btnTypeSell').classList.toggle('active', t === 'sell');
   Toast.show(`Switched to: ${t === 'buy' ? '📥 Buy (Client Sells USDT)' : '📤 Sell (Client Buys USDT)'}`, 'info');
+  // Recalculate profit suggestion — direction flips with txn type
+  suggestProfit();
 }
 
 // ── TRIPLE EXCHANGER CALCULATOR ───────────────────────────
@@ -499,10 +539,68 @@ function setupCalculator() {
   const usdtIn = document.getElementById('fAmountUsdt');
 
   // Multi-direction synchronization
-  pkrIn.addEventListener('input', () => { _calculatorFocused = 'pkr'; runCalculation(); });
-  rateIn.addEventListener('input', () => { runCalculation(); });
-  usdtIn.addEventListener('input', () => { _calculatorFocused = 'usdt'; runCalculation(); });
+  pkrIn.addEventListener('input', () => { _calculatorFocused = 'pkr'; runCalculation(); suggestProfit(); });
+  rateIn.addEventListener('input', () => { runCalculation(); suggestProfit(); });
+  usdtIn.addEventListener('input', () => { _calculatorFocused = 'usdt'; runCalculation(); suggestProfit(); });
+
+  // Profit suggestion — recalculate whenever cost rate changes
+  document.getElementById('fCostRate').addEventListener('input', suggestProfit);
 }
+
+// ── PROFIT AUTO-SUGGEST ───────────────────────────────────
+// Suggests profit based on cost_rate vs exchange_rate & amount_usdt.
+// buy:  profit = (exchange_rate - cost_rate) * amount_usdt
+// sell: profit = (cost_rate - exchange_rate) * amount_usdt
+// The suggestion is placed in the profit field ONLY when it is empty
+// or currently shows a previous suggestion — never overwrites a value
+// the user typed manually (tracked via _profitManuallyEdited).
+let _profitManuallyEdited = false;
+
+function suggestProfit() {
+  const costRate   = parseFloat(document.getElementById('fCostRate').value);
+  const exchRate   = parseFloat(document.getElementById('fExchangeRate').value);
+  const amtUsdt    = parseFloat(document.getElementById('fAmountUsdt').value) ||
+                     (parseFloat(document.getElementById('fAmountPkr').value) / exchRate) || 0;
+
+  const suggestEl  = document.getElementById('profitSuggest');
+  const suggestVal = document.getElementById('profitSuggestVal');
+  const profitIn   = document.getElementById('fProfitPkr');
+
+  if (!costRate || !exchRate || !amtUsdt) {
+    suggestEl.classList.remove('show');
+    return;
+  }
+
+  let suggested;
+  if (_txnType === 'buy') {
+    suggested = (exchRate - costRate) * amtUsdt;
+  } else {
+    suggested = (costRate - exchRate) * amtUsdt;
+  }
+
+  const formatted = suggested.toFixed(2);
+  suggestVal.textContent = Number(formatted).toLocaleString('en-PK', { minimumFractionDigits: 2 });
+  suggestEl.classList.add('show');
+
+  // Auto-fill only when the user hasn't manually typed a value
+  if (!_profitManuallyEdited) {
+    profitIn.value = formatted;
+  }
+}
+
+// Mark profit field as manually edited once the user types in it directly
+document.addEventListener('DOMContentLoaded', () => {
+  const profitIn = document.getElementById('fProfitPkr');
+  if (profitIn) {
+    profitIn.addEventListener('input', () => {
+      _profitManuallyEdited = true;
+    });
+    // If the user clears the field entirely, allow auto-suggest to resume
+    profitIn.addEventListener('change', () => {
+      if (!profitIn.value.trim()) _profitManuallyEdited = false;
+    });
+  }
+});
 
 function runCalculation() {
   const pkrIn  = document.getElementById('fAmountPkr');
@@ -757,6 +855,26 @@ async function saveAndLockTransaction() {
 
   const lockBtn = document.getElementById('btnLockTransaction');
   lockBtn.disabled = true;
+  lockBtn.textContent = '🕒 Checking device clock…';
+
+  // ── DEVICE CLOCK CHECK (best-effort, never blocks the transaction) ──
+  // This app has no backend, so the transaction timestamp is always the
+  // local device clock. We attempt a best-effort comparison against a
+  // public time API so an obviously wrong device clock can be flagged —
+  // but a failed/unavailable check never prevents locking the transaction.
+  let clockCheck = null;
+  try {
+    clockCheck = await HashEngine.checkDeviceClock();
+  } catch (e) {
+    clockCheck = { checked: false, reason: e.message };
+  }
+
+  if (clockCheck.checked && !clockCheck.drift_ok) {
+    Toast.show('⏰ Device clock looks wrong — fix it before locking this transaction.', 'warning', 6000);
+  } else if (!clockCheck.checked) {
+    Toast.show('ℹ️ Could not verify device clock against network time (offline?). Proceeding — this transaction will be marked clock-unverified.', 'info', 5000);
+  }
+
   lockBtn.textContent = '⏳ Calculating HASH & Chaining block…';
 
   const formData = {
@@ -764,6 +882,8 @@ async function saveAndLockTransaction() {
     amount_pkr      : pkr,
     exchange_rate   : rate,
     amount_usdt     : usdt || (pkr / rate),
+    cost_rate       : document.getElementById('fCostRate').value.trim() || '',
+    profit_pkr      : document.getElementById('fProfitPkr').value.trim() || '',
     client_name     : name,
     client_cnic     : cnic || '',
     bank_name       : document.getElementById('fBankName').value || '',
@@ -775,10 +895,13 @@ async function saveAndLockTransaction() {
   };
 
   try {
-    const response = await HashEngine.insertTransaction(formData);
+    const response = await HashEngine.insertTransaction(formData, clockCheck);
     
     if (response.success) {
-      Toast.show(`🔥 Block chained! Receipt: ${response.receiptNumber}`, 'success');
+      const clockNote = response.record?.clock_unverified
+        ? ' ⚠ Saved with clock-unverified flag.'
+        : '';
+      Toast.show(`🔥 Block chained! Receipt: ${response.receiptNumber}${clockNote}`, 'success');
       
       // Auto redirect to receipt viewer
       setTimeout(() => {

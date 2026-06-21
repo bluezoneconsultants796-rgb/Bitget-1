@@ -81,6 +81,7 @@
 
 /* Metrics stats summary grid */
 .metric-report-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 24px 0; }
+.metric-report-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
 .metric-box { background: var(--navy-3); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px 20px; }
 .mb-lbl { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .mb-val { font-family: var(--font-display); font-size: 20px; font-weight: 700; margin-top: 4px; }
@@ -140,7 +141,7 @@
 .doc-title h2 { font-size: 18px; color: #111827; font-weight: 700; text-transform: uppercase; }
 .doc-title .range { font-size: 12px; color: #6b7280; margin-top: 4px; }
 
-.doc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; background: #f9fafb; border: 1px solid #f3f4f6; border-radius: var(--radius-md); padding: 18px 24px; }
+.doc-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-bottom: 28px; background: #f9fafb; border: 1px solid #f3f4f6; border-radius: var(--radius-md); padding: 18px 24px; }
 .dg-item { }
 .dg-label { font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
 .dg-value { font-family: var(--font-display); font-size: 18px; font-weight: 700; color: #111827; margin-top: 2px; }
@@ -177,7 +178,7 @@
 
 @media (max-width: 900px) {
   .report-controls { grid-template-columns: 1fr 1fr; }
-  .metric-report-grid { grid-template-columns: 1fr; }
+  .metric-report-grid, .metric-report-grid.cols-4 { grid-template-columns: 1fr; }
   .doc-grid { grid-template-columns: 1fr 1fr; }
   .export-grid { grid-template-columns: 1fr; }
 }
@@ -365,6 +366,10 @@
               <div class="dg-label">Locked Block Counts</div>
               <div class="dg-value" id="dBlockCounts">0 Blocks</div>
             </div>
+            <div class="dg-item">
+              <div class="dg-label">Total Profit (PKR)</div>
+              <div class="dg-value" id="dTotalProfit">—</div>
+            </div>
           </div>
 
           <h3 style="color:#111827; font-size:13px; font-weight:700; text-transform:uppercase; margin-bottom:12px;">Chained Blocks Included</h3>
@@ -379,6 +384,7 @@
                 <th>Pkr Amount</th>
                 <th>Rate</th>
                 <th>Usdt Amount</th>
+                <th>Profit (PKR)</th>
               </tr>
             </thead>
             <tbody id="statementTableBody">
@@ -479,14 +485,33 @@
           </div>
         </div>
 
+        <div class="metric-report-grid">
+          <div class="metric-box">
+            <div class="mb-lbl">Matching Records</div>
+            <div class="mb-val" id="logMetTotal" style="color:var(--white);">0</div>
+          </div>
+          <div class="metric-box">
+            <div class="mb-lbl">Clock-Unverified</div>
+            <div class="mb-val" id="logMetClockUnverified" style="color:var(--gold);">0</div>
+            <div style="font-size:10.5px; color:var(--muted); margin-top:4px; line-height:1.4;">Device clock could not be confirmed against network time at submit — see tooltip below.</div>
+          </div>
+          <div class="metric-box">
+            <div class="mb-lbl">Chain Total</div>
+            <div class="mb-val" id="logMetChainTotal" style="color:var(--blue);">0</div>
+          </div>
+        </div>
+
         <div class="section-card">
           <div class="section-title">🧾 Matching Records (<span id="logResultCount">0</span>)</div>
+          <div style="font-size:11px; color:var(--muted); margin-bottom:14px; line-height:1.5;">
+            Rows marked <span style="color:var(--gold); font-weight:600;">🕒 Unverified</span> were created while this device's clock could not be confirmed against network time (offline, or drift &gt; 5 minutes). This does not affect the cryptographic hash chain or signature validity of those records — it is a transparency flag on the timestamp source only.
+          </div>
           <div class="table-scroll">
             <table class="dark-table">
               <thead>
                 <tr>
                   <th>Block</th><th>Receipt</th><th>Date</th><th>Type</th><th>Client</th><th>CNIC</th>
-                  <th>PKR</th><th>Rate</th><th>USDT</th><th>Bank</th>
+                  <th>PKR</th><th>Rate</th><th>USDT</th><th>Profit (PKR)</th><th>Bank</th><th>Clock</th>
                 </tr>
               </thead>
               <tbody id="logTableBody"></tbody>
@@ -581,7 +606,7 @@
           </div>
         </div>
 
-        <div class="metric-report-grid">
+        <div class="metric-report-grid cols-4">
           <div class="metric-box">
             <div class="mb-lbl">Year Total Volume (PKR)</div>
             <div class="mb-val" id="taxMetTotal" style="color:var(--white);">₨ 0</div>
@@ -594,13 +619,18 @@
             <div class="mb-lbl">Unique Clients Served</div>
             <div class="mb-val" id="taxMetClients" style="color:var(--purple);">0</div>
           </div>
+          <div class="metric-box">
+            <div class="mb-lbl">Year Total Profit (PKR)</div>
+            <div class="mb-val" id="taxMetProfit" style="color:#2DD4BF;">—</div>
+          </div>
         </div>
 
         <div class="section-card">
           <div class="section-title">📅 Monthly Breakdown</div>
+          <div style="font-size:11px; color:var(--muted); margin-bottom:14px;">Profit subtotals only include months with at least one transaction carrying a recorded profit figure — months with no profit data show "—".</div>
           <div class="table-scroll">
             <table class="dark-table">
-              <thead><tr><th>Month</th><th>Buy Volume PKR</th><th>Sell Volume PKR</th><th>Total Volume PKR</th><th>Transactions</th></tr></thead>
+              <thead><tr><th>Month</th><th>Buy Volume PKR</th><th>Sell Volume PKR</th><th>Total Volume PKR</th><th>Profit (PKR)</th><th>Transactions</th></tr></thead>
               <tbody id="taxTableBody"></tbody>
             </table>
           </div>
@@ -808,12 +838,25 @@ function populateStatementA4Doc() {
   let totalRate = 0;
   let count     = _filteredStatementData.length;
 
+  // Profit total — only sums records that actually have a profit_pkr value;
+  // NULL/blank records (e.g. older transactions, or new ones where the
+  // optional field was left empty) are excluded from the sum rather than
+  // treated as 0, consistent with how blanks are shown elsewhere ("—").
+  let totalProfit = 0;
+  let profitRecordCount = 0;
+
   const tbody = document.getElementById('statementTableBody');
 
   tbody.innerHTML = _filteredStatementData.map(t => {
     totalPkr += parseFloat(t.amount_pkr) || 0;
     totalUsdt += parseFloat(t.amount_usdt) || 0;
     totalRate += parseFloat(t.exchange_rate) || 0;
+
+    const hasProfit = t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '';
+    if (hasProfit) {
+      totalProfit += parseFloat(t.profit_pkr) || 0;
+      profitRecordCount++;
+    }
 
     const isBuy = t.txn_type === 'buy';
 
@@ -829,6 +872,7 @@ function populateStatementA4Doc() {
         <td>₨ ${parseFloat(t.amount_pkr).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
         <td>${parseFloat(t.exchange_rate).toFixed(3)}</td>
         <td>${parseFloat(t.amount_usdt).toFixed(2)} USDT</td>
+        <td style="color:${!hasProfit ? '#9ca3af' : (parseFloat(t.profit_pkr) < 0 ? '#dc2626' : '#111827')};">${hasProfit ? '₨ ' + parseFloat(t.profit_pkr).toLocaleString(undefined, {minimumFractionDigits:2}) : '—'}</td>
       </tr>
     `;
   }).join('');
@@ -840,6 +884,9 @@ function populateStatementA4Doc() {
   document.getElementById('dTotalUsdt').textContent = `${totalUsdt.toFixed(2)} USDT`;
   document.getElementById('dAvgRate').textContent = avgRate.toFixed(3);
   document.getElementById('dBlockCounts').textContent = `${count} Blocks`;
+  document.getElementById('dTotalProfit').textContent = profitRecordCount > 0
+    ? `₨ ${totalProfit.toLocaleString(undefined, {minimumFractionDigits:2})}`
+    : '—';
 
   document.getElementById('docDatePrep').textContent = new Date().toLocaleString();
 
@@ -957,7 +1004,7 @@ function exportReportAsCsv() {
     return;
   }
 
-  const headers = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Client Name', 'Client CNIC'];
+  const headers = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC'];
   const csvRows = [headers.join(',')];
 
   _filteredStatementData.forEach(t => {
@@ -969,6 +1016,8 @@ function exportReportAsCsv() {
       t.amount_pkr,
       t.exchange_rate,
       t.amount_usdt,
+      (t.cost_rate === null || t.cost_rate === undefined) ? '' : t.cost_rate,
+      (t.profit_pkr === null || t.profit_pkr === undefined) ? '' : t.profit_pkr,
       `"${t.client_name.replace(/"/g, '""')}"`,
       `"${t.client_cnic || ''}"`
     ];
@@ -1145,14 +1194,28 @@ function renderTransactionLog() {
 
   document.getElementById('logResultCount').textContent = _logFiltered.length;
 
+  // ── Clock-unverified metrics (chain-integrity transparency, requirement #5) ──
+  const clockUnverifiedInView = _logFiltered.filter(t => Number(t.clock_unverified) === 1).length;
+  const clockUnverifiedTotal  = _allTxns.filter(t => Number(t.clock_unverified) === 1).length;
+  setTxt('logMetTotal', _logFiltered.length);
+  setTxt('logMetClockUnverified', clockUnverifiedInView);
+  setTxt('logMetChainTotal', `${_allTxns.length} (${clockUnverifiedTotal} unverified)`);
+
   const tbody = document.getElementById('logTableBody');
   if (_logFiltered.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center; color:var(--muted); padding:30px;">No matching transactions.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" style="text-align:center; color:var(--muted); padding:30px;">No matching transactions.</td></tr>`;
     return;
   }
 
   tbody.innerHTML = _logFiltered.map(t => {
     const isBuy = t.txn_type === 'buy';
+    const clockCell = Number(t.clock_unverified) === 1
+      ? `<span style="color:var(--gold); font-size:11px; font-weight:600; white-space:nowrap;" title="Device clock could not be confirmed against network time when this record was created.">🕒 Unverified</span>`
+      : `<span style="color:var(--green); font-size:11px;" title="Device clock matched network time within 5 minutes at submit.">✓</span>`;
+    const hasProfit = t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '';
+    const profitCell = hasProfit
+      ? `<span style="color:${parseFloat(t.profit_pkr) < 0 ? '#FCA5A5' : 'var(--green)'};">₨ ${parseFloat(t.profit_pkr).toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>`
+      : `<span style="color:var(--muted);">—</span>`;
     return `
       <tr>
         <td class="mono">#${t.chain_index}</td>
@@ -1164,7 +1227,9 @@ function renderTransactionLog() {
         <td>₨ ${parseFloat(t.amount_pkr).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
         <td>${parseFloat(t.exchange_rate).toFixed(3)}</td>
         <td>${parseFloat(t.amount_usdt).toFixed(2)}</td>
+        <td>${profitCell}</td>
         <td>${esc(t.bank_name || '—')}</td>
+        <td>${clockCell}</td>
       </tr>
     `;
   }).join('');
@@ -1230,10 +1295,14 @@ function computeMonthlyTaxSummary(year) {
     const y = t.timestamp.substring(0, 4);
     if (year && y !== String(year)) return;
     const month = t.timestamp.substring(0, 7);
-    if (!groups[month]) groups[month] = { buy: 0, sell: 0, count: 0 };
+    if (!groups[month]) groups[month] = { buy: 0, sell: 0, count: 0, profit: 0, profitCount: 0 };
     const val = parseFloat(t.amount_pkr) || 0;
     if (t.txn_type === 'buy') groups[month].buy += val; else groups[month].sell += val;
     groups[month].count++;
+    if (t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '') {
+      groups[month].profit += parseFloat(t.profit_pkr) || 0;
+      groups[month].profitCount++;
+    }
   });
   return Object.keys(groups).sort().map(m => ({ month: m, ...groups[m] }));
 }
@@ -1255,24 +1324,44 @@ function renderTaxSummaryTab() {
   const totalVol = yearTxns.reduce((a, t) => a + (parseFloat(t.amount_pkr) || 0), 0);
   const uniqueClients = new Set(yearTxns.map(t => t.client_cnic || t.client_name)).size;
 
+  // Year Total Profit — sums only transactions that carry a profit_pkr
+  // value; years/months with no profit data at all render "—" rather
+  // than a misleading ₨ 0.
+  const yearProfitTxns = yearTxns.filter(t => t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '');
+  const yearProfit = yearProfitTxns.reduce((a, t) => a + (parseFloat(t.profit_pkr) || 0), 0);
+
   document.getElementById('taxMetTotal').textContent = `₨ ${Math.round(totalVol).toLocaleString()}`;
   document.getElementById('taxMetCount').textContent = yearTxns.length;
   document.getElementById('taxMetClients').textContent = uniqueClients;
+  document.getElementById('taxMetProfit').textContent = yearProfitTxns.length > 0
+    ? `₨ ${Math.round(yearProfit).toLocaleString()}`
+    : '—';
 
   const tbody = document.getElementById('taxTableBody');
   if (monthly.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--muted); padding:30px;">No data for this year.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--muted); padding:30px;">No data for this year.</td></tr>`;
     return;
   }
+
   tbody.innerHTML = monthly.map(m => `
     <tr>
       <td>${m.month}</td>
       <td>₨ ${Math.round(m.buy).toLocaleString()}</td>
       <td>₨ ${Math.round(m.sell).toLocaleString()}</td>
       <td>₨ ${Math.round(m.buy + m.sell).toLocaleString()}</td>
+      <td style="color:${m.profitCount === 0 ? 'var(--muted)' : (m.profit < 0 ? '#FCA5A5' : 'var(--green)')};">${m.profitCount > 0 ? '₨ ' + Math.round(m.profit).toLocaleString() : '—'}</td>
       <td>${m.count}</td>
     </tr>
-  `).join('');
+  `).join('') + `
+    <tr style="font-weight:700; background:rgba(14,165,233,0.04); border-top:2px solid var(--border);">
+      <td>Total</td>
+      <td>₨ ${Math.round(monthly.reduce((a,m)=>a+m.buy,0)).toLocaleString()}</td>
+      <td>₨ ${Math.round(monthly.reduce((a,m)=>a+m.sell,0)).toLocaleString()}</td>
+      <td>₨ ${Math.round(monthly.reduce((a,m)=>a+m.buy+m.sell,0)).toLocaleString()}</td>
+      <td style="color:${yearProfitTxns.length === 0 ? 'var(--muted)' : (yearProfit < 0 ? '#FCA5A5' : 'var(--green)')};">${yearProfitTxns.length > 0 ? '₨ ' + Math.round(yearProfit).toLocaleString() : '—'}</td>
+      <td>${monthly.reduce((a,m)=>a+m.count,0)}</td>
+    </tr>
+  `;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1294,10 +1383,12 @@ function exportStatementAsExcel() {
   }
   if (!ensureXLSX()) return;
 
-  const header = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Client Name', 'Client CNIC', 'Bank Name', 'Hash'];
+  const header = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name', 'Hash'];
   const rows = _filteredStatementData.map(t => [
     t.chain_index, t.receipt_number, t.txn_type.toUpperCase(), t.timestamp,
     parseFloat(t.amount_pkr), parseFloat(t.exchange_rate), parseFloat(t.amount_usdt),
+    (t.cost_rate === null || t.cost_rate === undefined) ? '' : parseFloat(t.cost_rate),
+    (t.profit_pkr === null || t.profit_pkr === undefined) ? '' : parseFloat(t.profit_pkr),
     t.client_name || '', t.client_cnic || '', t.bank_name || '', t.hash
   ]);
 
@@ -1322,10 +1413,12 @@ function exportFullWorkbookExcel() {
   const wb = XLSX.utils.book_new();
 
   // Sheet 1: All Transactions
-  const txnHeader = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Client Name', 'Client CNIC', 'Bank Name', 'Bank Last4', 'Payment Ref', 'Order ID', 'Hash', 'Prev Hash'];
+  const txnHeader = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name', 'Bank Last4', 'Payment Ref', 'Order ID', 'Hash', 'Prev Hash'];
   const txnRows = _allTxns.map(t => [
     t.chain_index, t.receipt_number, t.txn_type.toUpperCase(), t.timestamp,
     parseFloat(t.amount_pkr), parseFloat(t.exchange_rate), parseFloat(t.amount_usdt),
+    (t.cost_rate === null || t.cost_rate === undefined) ? '' : parseFloat(t.cost_rate),
+    (t.profit_pkr === null || t.profit_pkr === undefined) ? '' : parseFloat(t.profit_pkr),
     t.client_name || '', t.client_cnic || '', t.bank_name || '', t.bank_last4 || '',
     t.payment_ref || '', t.order_id || '', t.hash, t.prev_hash
   ]);
@@ -1341,8 +1434,20 @@ function exportFullWorkbookExcel() {
 
   // Sheet 3: Monthly Volume (all years)
   const monthly = computeMonthlyTaxSummary(null);
-  const monHeader = ['Month', 'Buy Volume PKR', 'Sell Volume PKR', 'Total Volume PKR', 'Transactions'];
-  const monRows = monthly.map(m => [m.month, Math.round(m.buy), Math.round(m.sell), Math.round(m.buy + m.sell), m.count]);
+  const monHeader = ['Month', 'Buy Volume PKR', 'Sell Volume PKR', 'Total Volume PKR', 'Profit PKR', 'Transactions'];
+  const monRows = monthly.map(m => [
+    m.month, Math.round(m.buy), Math.round(m.sell), Math.round(m.buy + m.sell),
+    m.profitCount > 0 ? Math.round(m.profit) : '', m.count
+  ]);
+  const monTotalProfitCount = monthly.reduce((a,m) => a + m.profitCount, 0);
+  monRows.push([
+    'Total',
+    Math.round(monthly.reduce((a,m)=>a+m.buy,0)),
+    Math.round(monthly.reduce((a,m)=>a+m.sell,0)),
+    Math.round(monthly.reduce((a,m)=>a+m.buy+m.sell,0)),
+    monTotalProfitCount > 0 ? Math.round(monthly.reduce((a,m)=>a+m.profit,0)) : '',
+    monthly.reduce((a,m)=>a+m.count,0)
+  ]);
   const wsMon = XLSX.utils.aoa_to_sheet([monHeader, ...monRows]);
   XLSX.utils.book_append_sheet(wb, wsMon, 'Monthly Volume');
 
@@ -1360,12 +1465,14 @@ function exportTransactionLogCsv() {
   const data = _logFiltered.length ? _logFiltered : _allTxns;
   if (data.length === 0) { Toast.show('No transactions to export.', 'warning'); return; }
 
-  const headers = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Client Name', 'Client CNIC', 'Bank Name'];
+  const headers = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name'];
   const csvRows = [headers.join(',')];
   data.forEach(t => {
     csvRows.push([
       t.chain_index, `"${t.receipt_number}"`, `"${t.txn_type.toUpperCase()}"`, `"${t.timestamp}"`,
       t.amount_pkr, t.exchange_rate, t.amount_usdt,
+      (t.cost_rate === null || t.cost_rate === undefined) ? '' : t.cost_rate,
+      (t.profit_pkr === null || t.profit_pkr === undefined) ? '' : t.profit_pkr,
       `"${(t.client_name || '').replace(/"/g, '""')}"`, `"${t.client_cnic || ''}"`, `"${(t.bank_name || '').replace(/"/g, '""')}"`
     ].join(','));
   });
@@ -1395,11 +1502,25 @@ function exportTaxSummaryCsv() {
   const monthly = computeMonthlyTaxSummary(year);
   if (monthly.length === 0) { Toast.show('No tax data to export for this year.', 'warning'); return; }
 
-  const headers = ['Month', 'Buy Volume PKR', 'Sell Volume PKR', 'Total Volume PKR', 'Transactions'];
+  const headers = ['Month', 'Buy Volume PKR', 'Sell Volume PKR', 'Total Volume PKR', 'Profit PKR', 'Transactions'];
   const csvRows = [headers.join(',')];
   monthly.forEach(m => {
-    csvRows.push([m.month, Math.round(m.buy), Math.round(m.sell), Math.round(m.buy + m.sell), m.count].join(','));
+    csvRows.push([
+      m.month, Math.round(m.buy), Math.round(m.sell), Math.round(m.buy + m.sell),
+      m.profitCount > 0 ? Math.round(m.profit) : '', m.count
+    ].join(','));
   });
+
+  const totalProfitCount = monthly.reduce((a,m) => a + m.profitCount, 0);
+  const totalProfit = monthly.reduce((a,m) => a + m.profit, 0);
+  csvRows.push([
+    'Total',
+    Math.round(monthly.reduce((a,m)=>a+m.buy,0)),
+    Math.round(monthly.reduce((a,m)=>a+m.sell,0)),
+    Math.round(monthly.reduce((a,m)=>a+m.buy+m.sell,0)),
+    totalProfitCount > 0 ? Math.round(totalProfit) : '',
+    monthly.reduce((a,m)=>a+m.count,0)
+  ].join(','));
 
   downloadCsvBlob(csvRows.join('\n'), `FBR-Tax-Summary-${year}.csv`);
   Toast.show('📄 Tax summary CSV downloaded.', 'success');

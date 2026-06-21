@@ -91,7 +91,7 @@
 .period-btn.active { background: var(--blue); color: #fff; }
 
 /* ── KPI CARDS ──────────────────────────────────────────── */
-.kpi-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 24px; }
+.kpi-grid { display: grid; grid-template-columns: repeat(5,1fr); gap: 14px; margin-bottom: 24px; }
 .kpi-card {
   background: var(--navy-2); border: 1px solid var(--border);
   border-radius: var(--radius-lg); padding: 20px 22px;
@@ -105,6 +105,7 @@
 .kpi-card.c-green::after { background: var(--green); }
 .kpi-card.c-gold::after  { background: var(--gold); }
 .kpi-card.c-purple::after{ background: var(--purple); }
+.kpi-card.c-teal::after  { background: #2DD4BF; }
 
 .kpi-top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 14px; }
 .kpi-icon { font-size: 20px; opacity: 0.85; }
@@ -121,6 +122,8 @@
 .kpi-card.c-green  .kpi-val { color: var(--green); }
 .kpi-card.c-gold   .kpi-val { color: var(--gold); }
 .kpi-card.c-purple .kpi-val { color: var(--purple); }
+.kpi-card.c-teal   .kpi-val { color: #2DD4BF; }
+.kpi-card.c-teal   .kpi-val.negative { color: #FCA5A5; }
 .kpi-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
 
 /* ── CHART SECTION ──────────────────────────────────────── */
@@ -253,6 +256,9 @@
 /* ── MOBILE OVERLAY ─────────────────────────────────────── */
 .mobile-overlay { display: none; position: fixed; inset: 0; background: rgba(8,15,28,0.7); z-index: 90; }
 .mobile-overlay.show { display: block; }
+@media (max-width: 1100px) {
+  .kpi-grid { grid-template-columns: repeat(3,1fr); }
+}
 @media (max-width: 768px) {
   .sidebar { left: -220px; }
   .sidebar.open { left: 0; }
@@ -377,6 +383,20 @@
         </div>
       </div>
 
+      <!-- Anchor Reminder Banner (tamper-EVIDENCE, not tamper-prevention —
+           see exportChainAnchor() in hash-engine.js for why this matters) -->
+      <div class="chain-banner warning" id="anchorBanner" style="display:none;">
+        <div class="banner-icon">🪪</div>
+        <div class="banner-text">
+          <div class="banner-title">Save a Chain Anchor</div>
+          <div class="banner-sub" id="anchorBannerSub">It's been a while since you last saved an anchor outside this device.</div>
+        </div>
+        <div class="banner-action">
+          <a href="chain-integrity.html" class="btn-secondary btn-sm">Save Anchor →</a>
+        </div>
+      </div>
+
+
       <!-- Page Header -->
       <div class="page-header">
         <div class="page-header-left">
@@ -426,6 +446,14 @@
           </div>
           <div class="kpi-val" id="kpiAvg">—</div>
           <div class="kpi-label">Avg Transaction</div>
+        </div>
+        <div class="kpi-card c-teal">
+          <div class="kpi-top">
+            <div class="kpi-icon">💵</div>
+            <div class="kpi-delta flat" id="deltaProfit">—</div>
+          </div>
+          <div class="kpi-val" id="kpiProfit">—</div>
+          <div class="kpi-label">Total Profit (PKR)</div>
         </div>
       </div>
 
@@ -566,6 +594,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   setLoadingLabel('Loading transactions…');
   await loadAllData();
+  checkAnchorReminder();
 
   setLoadingLabel('Building charts…');
   renderDashboard();
@@ -592,6 +621,35 @@ async function loadProfile() {
       setTxt('ptbSub', p.businessName || 'Exchange Management System');
     }
   } catch(e) {}
+}
+
+// ── ANCHOR REMINDER ───────────────────────────────────────
+// Tamper-EVIDENCE nudge: the hash chain only proves internal
+// consistency of the local data, not that it was never altered
+// by someone with device access. An anchor saved off-device once
+// a day closes that gap. This banner just reminds; it never blocks.
+function checkAnchorReminder() {
+  try {
+    const meta = HashEngine.getLastAnchorMeta();
+    const banner = document.getElementById('anchorBanner');
+    const sub = document.getElementById('anchorBannerSub');
+    if (!banner) return;
+
+    // Nothing to anchor yet if the chain itself is empty.
+    if (!_allTxns || _allTxns.length === 0) {
+      if (banner) banner.style.display = 'none';
+    }
+
+    if (!meta.overdue) {
+      banner.style.display = 'none';
+      return;
+    }
+
+    sub.textContent = meta.hasAnchor
+      ? `Last anchor saved ${formatTimeAgo(meta.takenAt)}. Save a fresh one to keep off-device tamper evidence current.`
+      : `No anchor has been saved yet. Saving one outside this device lets you later detect changes that a purely local hash check can't catch.`;
+    banner.style.display = 'flex';
+  } catch (e) { /* non-fatal — reminder only */ }
 }
 
 // ── CHAIN CHECK ───────────────────────────────────────────
@@ -681,12 +739,29 @@ function renderKPIs(txns) {
   const total = txns.reduce((s,t) => s + (parseFloat(t.amount_pkr)||0), 0);
   const avg   = txns.length ? total / txns.length : 0;
 
+  // Total Profit (PKR) — SUM(profit_pkr) over the selected period.
+  // Records with NULL/blank profit_pkr simply don't contribute to the sum
+  // (treated as 0 for aggregation purposes only — they are never coerced
+  // to 0 for display elsewhere, e.g. in the transactions ledger, where a
+  // blank stays "—"). This mirrors how amount_pkr/amount_usdt are summed.
+  const profitTxns = txns.filter(t => t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '');
+  const totalProfit = profitTxns.reduce((s,t) => s + (parseFloat(t.profit_pkr)||0), 0);
+
   const clientSet = new Set(txns.filter(t => t.client_name).map(t => t.client_name.trim().toLowerCase()));
 
   setTxt('kpiVolume', fmtPkrBig(total));
   setTxt('kpiTxns',   txns.length.toLocaleString());
   setTxt('kpiClients', clientSet.size.toLocaleString());
   setTxt('kpiAvg', fmtPkrBig(avg));
+
+  const profitEl = document.getElementById('kpiProfit');
+  if (profitTxns.length === 0) {
+    profitEl.textContent = '—';
+    profitEl.classList.remove('negative');
+  } else {
+    profitEl.textContent = (totalProfit < 0 ? '-' : '') + fmtPkrBig(Math.abs(totalProfit));
+    profitEl.classList.toggle('negative', totalProfit < 0);
+  }
 
   if (_period > 0) {
     const prevCutoff = new Date();
@@ -703,6 +778,10 @@ function renderKPIs(txns) {
     renderDelta('deltaClients', clientSet.size, prevClientSet.size);
     const prevAvg = prev.length ? prevVol / prev.length : 0;
     renderDelta('deltaAvg', avg, prevAvg);
+
+    const prevProfitTxns = prev.filter(t => t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '');
+    const prevProfit = prevProfitTxns.reduce((s,t) => s + (parseFloat(t.profit_pkr)||0), 0);
+    renderProfitDelta(profitTxns.length === 0 && prevProfitTxns.length === 0, totalProfit, prevProfit, prevProfitTxns.length > 0);
   }
 }
 
@@ -713,6 +792,24 @@ function renderDelta(id, curr, prev) {
   const abs = Math.abs(pct).toFixed(1);
   el.textContent = (pct >= 0 ? '↑ ' : '↓ ') + abs + '%';
   el.className = 'kpi-delta ' + (pct >= 0 ? 'up' : 'down');
+}
+
+// Profit-specific delta: unlike volume/txns/clients/avg, profit can be
+// negative, so a plain percent-change (which divides by the previous
+// value) gives a misleading or sign-flipped result whenever the previous
+// period was a loss or zero. This shows the plain PKR change instead —
+// always sign-correct, and meaningful even when crossing zero.
+function renderProfitDelta(noPriorData, curr, prev, hadPrev) {
+  const el = document.getElementById('deltaProfit');
+  if (noPriorData || !hadPrev) {
+    el.textContent = hadPrev ? '—' : 'New';
+    el.className = 'kpi-delta flat';
+    return;
+  }
+  const diff = curr - prev;
+  const label = (diff >= 0 ? '↑ ' : '↓ ') + fmtPkrBig(Math.abs(diff));
+  el.textContent = label;
+  el.className = 'kpi-delta ' + (diff >= 0 ? 'up' : 'down');
 }
 
 // ── VOLUME CHART ──────────────────────────────────────────

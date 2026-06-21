@@ -51,7 +51,11 @@ const DB = (() => {
       hash            TEXT NOT NULL,              -- SHA-256 of this record
       prev_hash       TEXT NOT NULL DEFAULT '0',  -- Hash chain link
       chain_index     INTEGER NOT NULL DEFAULT 0, -- Position in chain
-      is_locked       INTEGER NOT NULL DEFAULT 1  -- Always 1 after insert
+      is_locked       INTEGER NOT NULL DEFAULT 1, -- Always 1 after insert
+      clock_unverified INTEGER NOT NULL DEFAULT 0, -- 1 if device clock could not be checked against network time at submit
+      cost_rate       REAL,                        -- Optional: rate the exchange trades at with its liquidity provider
+      profit_pkr      REAL,                        -- Optional: profit/loss in PKR for this transaction
+      hash_version    TEXT NOT NULL DEFAULT 'DEMS-v1' -- Which fieldOrder this record's hash was built with (DEMS-v1 or DEMS-v2)
     );
 
     -- ── PHASE 04: Receipts ───────────────────────────────
@@ -202,6 +206,62 @@ const DB = (() => {
           catch (e2) { console.warn('[DB] Schema statement skipped:', e2.message); }
         });
       }
+
+      // ── MIGRATION: clock_unverified column ──
+      // CREATE TABLE IF NOT EXISTS is a no-op on a transactions table that
+      // already existed before this column was introduced, so databases
+      // created earlier need it added explicitly. This is purely additive —
+      // it adds a new column with a default value and does not modify any
+      // existing row's stored data, so it does not conflict with the
+      // no-UPDATE/no-DELETE invariant on this table.
+      try {
+        const cols = _db.exec(`PRAGMA table_info(transactions)`);
+        const hasCol = cols.length && cols[0].values.some(row => row[1] === 'clock_unverified');
+        if (!hasCol) {
+          _db.run(`ALTER TABLE transactions ADD COLUMN clock_unverified INTEGER NOT NULL DEFAULT 0`);
+        }
+      } catch (e) {
+        console.warn('[DB] clock_unverified migration skipped:', e.message);
+      }
+
+      // ── MIGRATION: cost_rate and profit_pkr columns (Phase 03 — profit tracking) ──
+      // Nullable REAL columns — existing rows will read NULL for both, which the
+      // hash engine treats as '' in v1 payload (not in fieldOrder) and as the
+      // string 'null' in v2 payload.  Purely additive; no existing data is changed.
+      try {
+        const cols2 = _db.exec(`PRAGMA table_info(transactions)`);
+        const colNames = cols2.length ? cols2[0].values.map(row => row[1]) : [];
+        if (!colNames.includes('cost_rate')) {
+          _db.run(`ALTER TABLE transactions ADD COLUMN cost_rate REAL`);
+        }
+        if (!colNames.includes('profit_pkr')) {
+          _db.run(`ALTER TABLE transactions ADD COLUMN profit_pkr REAL`);
+        }
+      } catch (e) {
+        console.warn('[DB] cost_rate/profit_pkr migration skipped:', e.message);
+      }
+
+      // ── MIGRATION: hash_version column (Phase 03 — profit tracking) ──
+      // Records inserted before this migration were hashed under the v1
+      // field order (no cost_rate/profit_pkr in the payload), so any row
+      // that doesn't already have a hash_version must be backfilled with
+      // 'DEMS-v1' — NOT the current version — so HashEngine.verifyRecord()
+      // keeps picking the v1 field order for them and they continue to
+      // verify correctly. ALTER TABLE ... DEFAULT applies retroactively to
+      // existing rows for the purpose of this backfill UPDATE only; it does
+      // not touch hash, prev_hash, or any other already-committed field, so
+      // it does not conflict with the no-UPDATE/no-DELETE invariant on this
+      // table's hashed data.
+      try {
+        const cols3 = _db.exec(`PRAGMA table_info(transactions)`);
+        const colNames3 = cols3.length ? cols3[0].values.map(row => row[1]) : [];
+        if (!colNames3.includes('hash_version')) {
+          _db.run(`ALTER TABLE transactions ADD COLUMN hash_version TEXT NOT NULL DEFAULT 'DEMS-v1'`);
+        }
+      } catch (e) {
+        console.warn('[DB] hash_version migration skipped:', e.message);
+      }
+
       saveToStorage();
 
       return _db;
@@ -301,6 +361,61 @@ const DB = (() => {
         totalClients     : clients?.cnt || 0,
         todayTransactions: todayTxn?.cnt || 0,
         todayVolume      : todayTxn?.vol || 0
+      };
+    },
+
+    // ════════════════════════════════════════════════════════
+    //  PROTECTED TABLES — NEVER ERASABLE BY ANY RESET PATH
+    //
+    //  These hold the financial/audit record the app exists to
+    //  protect (transactionImmutable / noDeleteAllowed). No reset,
+    //  "factory reset", or maintenance function is permitted to
+    //  drop, truncate, or DELETE FROM any of these — ever. This
+    //  list is intentionally hardcoded here (not passed in by a
+    //  caller) so a UI bug or careless edit elsewhere can't expand
+    //  what gets erased.
+    // ════════════════════════════════════════════════════════
+    PROTECTED_TABLES: ['transactions', 'receipts', 'verification_log', 'audit_log'],
+
+    /**
+     * resetAppConfigOnly()
+     * The ONLY sanctioned "factory reset"-style operation. Clears
+     * app-level configuration (app_settings) so a misconfigured
+     * install can be reset to a clean shell — and nothing else.
+     * It does NOT touch transactions, receipts, verification_log,
+     * audit_log, or clients. Credential localStorage keys (PIN/
+     * password hashes) are cleared by the caller in settings.html,
+     * since those live outside the SQLite DB.
+     *
+     * Returns a summary of exactly what was cleared, so the caller
+     * can log/display it accurately rather than guessing.
+     */
+    async resetAppConfigOnly() {
+      if (!_db) await this.init();
+
+      const before = await this.get('SELECT COUNT(*) as cnt FROM app_settings');
+
+      // Hardcoded, allow-listed statement — does not accept or build
+      // table names dynamically, so it cannot be redirected at any
+      // table other than app_settings.
+      _db.run('DELETE FROM app_settings');
+      saveToStorage();
+
+      const survivingCounts = {};
+      for (const t of this.PROTECTED_TABLES) {
+        try {
+          const row = await this.get(`SELECT COUNT(*) as cnt FROM ${t}`);
+          survivingCounts[t] = row?.cnt || 0;
+        } catch (e) {
+          survivingCounts[t] = 'unavailable';
+        }
+      }
+
+      return {
+        clearedTable   : 'app_settings',
+        clearedRows    : before?.cnt || 0,
+        protectedTables: this.PROTECTED_TABLES,
+        survivingCounts: survivingCounts
       };
     }
 

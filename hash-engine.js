@@ -5,7 +5,8 @@
 
 const HashEngine = (() => {
 
-  const HASH_VERSION   = 'DEMS-v1';
+  const HASH_VERSION   = 'DEMS-v2';   // current version — includes cost_rate & profit_pkr
+  const HASH_VERSION_V1 = 'DEMS-v1'; // legacy version — for verifying pre-profit records
   const GENESIS_HASH   = '0'.repeat(64);
   const SALT           = 'DEMS_CHAIN_SALT_2024';
 
@@ -16,9 +17,25 @@ const HashEngine = (() => {
     return bytes.map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  function buildHashPayload(record, prevHash) {
+  // ── buildHashPayload ────────────────────────────────────
+  //
+  // Builds the pipe-delimited string that gets SHA-256'd into the
+  // record's `hash` field.
+  //
+  // v1 (DEMS-v1): original field order — no profit fields.
+  //               Used for all records inserted before profit tracking.
+  //
+  // v2 (DEMS-v2): adds cost_rate and profit_pkr immediately after
+  //               amount_usdt.  NULL values are serialised as the
+  //               string 'null' so the payload is unambiguous.
+  //
+  // Always call buildHashPayloadV2() for NEW records.
+  // Call buildHashPayloadForRecord() when verifying an existing record
+  // — it picks v1 or v2 based on the HASH_VERSION stored in the row.
+  //
+  function buildHashPayloadV1(record, prevHash) {
     const fields = [
-      HASH_VERSION,
+      HASH_VERSION_V1,
       record.receipt_number  || '',
       record.txn_type        || '',
       String(record.amount_pkr    || 0),
@@ -38,8 +55,123 @@ const HashEngine = (() => {
     return fields.join('|');
   }
 
-  function getServerTimestamp() {
+  function buildHashPayloadV2(record, prevHash) {
+    const fields = [
+      HASH_VERSION,
+      record.receipt_number  || '',
+      record.txn_type        || '',
+      String(record.amount_pkr    || 0),
+      String(record.exchange_rate || 0),
+      String(record.amount_usdt   || 0),
+      // profit fields — null when not supplied
+      record.cost_rate  == null ? 'null' : String(record.cost_rate),
+      record.profit_pkr == null ? 'null' : String(record.profit_pkr),
+      record.client_name     || '',
+      record.client_cnic     || '',
+      record.bank_name       || '',
+      record.bank_last4      || '',
+      record.order_id        || '',
+      record.payment_ref     || '',
+      record.timestamp,
+      String(record.chain_index),
+      prevHash,
+      SALT
+    ];
+    return fields.join('|');
+  }
+
+  // Picks the correct payload builder based on which HASH_VERSION is
+  // stamped on the record itself — so old rows always verify under v1
+  // and new rows always verify under v2, regardless of the current
+  // HASH_VERSION constant above.
+  function buildHashPayloadForRecord(record, prevHash) {
+    const ver = (record.hash_version || '').trim();
+    if (ver === HASH_VERSION_V1 || ver === 'DEMS-v1') {
+      return buildHashPayloadV1(record, prevHash);
+    }
+    // Default to v2 for new records and any future versions.
+    return buildHashPayloadV2(record, prevHash);
+  }
+
+  // Convenience alias used by new-record paths (always v2 going forward).
+  function buildHashPayload(record, prevHash) {
+    return buildHashPayloadV2(record, prevHash);
+  }
+
+  function getDeviceTimestamp() {
+    // Renamed from getServerTimestamp — this app has no backend, so this is
+    // always the LOCAL DEVICE clock, never a true server time. See
+    // checkNetworkTime() below for the best-effort network time comparison
+    // used to flag transactions where the device clock could not be verified.
     return new Date().toISOString();
+  }
+
+  // ════════════════════════════════════════════════════════
+  //  NETWORK TIME CHECK (best-effort, never blocking)
+  //
+  //  This app has no backend, so there is no authoritative server
+  //  time to stamp records with. As an interim integrity measure,
+  //  on submit we attempt to fetch the current time from a public
+  //  time API and compare it to the device clock. This does NOT
+  //  change what gets stored as the record's timestamp — it only
+  //  tells us whether the device clock looked trustworthy at the
+  //  moment of submission, which gets recorded via clock_unverified.
+  // ════════════════════════════════════════════════════════
+
+  const CLOCK_DRIFT_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+  const TIME_API_URL = 'https://worldtimeapi.org/api/timezone/Etc/UTC';
+  const TIME_API_TIMEOUT_MS = 4000;
+
+  async function fetchNetworkTime() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIME_API_TIMEOUT_MS);
+
+    try {
+      const res = await fetch(TIME_API_URL, { signal: controller.signal, cache: 'no-store' });
+      if (!res.ok) throw new Error(`Time API responded with ${res.status}`);
+      const data = await res.json();
+      if (!data || !data.utc_datetime) throw new Error('Time API response missing utc_datetime');
+      return new Date(data.utc_datetime).getTime();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  /**
+   * checkNetworkTime()
+   * Best-effort comparison of the device clock against a public time API.
+   * NEVER throws — always resolves to a status object so callers can
+   * proceed with the transaction regardless of outcome.
+   *
+   * Returns one of:
+   *   { checked: true,  drift_ok: true,  driftMs }   — clock looks fine
+   *   { checked: true,  drift_ok: false, driftMs }   — clock is off by >5min
+   *   { checked: false, reason }                     — network check unavailable (offline, timeout, API error)
+   */
+  async function checkNetworkTime() {
+    try {
+      const beforeLocal = Date.now();
+      const networkMs   = await fetchNetworkTime();
+      const afterLocal   = Date.now();
+
+      // Account for round-trip latency by comparing against the midpoint
+      // of when the request was sent/received.
+      const localMidpoint = (beforeLocal + afterLocal) / 2;
+      const driftMs = Math.abs(localMidpoint - networkMs);
+
+      return {
+        checked  : true,
+        drift_ok : driftMs <= CLOCK_DRIFT_THRESHOLD_MS,
+        driftMs  : Math.round(driftMs)
+      };
+    } catch (e) {
+      // Offline, request timed out, CORS blocked, API down, etc. — this is
+      // expected and must never block the transaction.
+      return {
+        checked : false,
+        reason  : e.message || 'Network time check failed'
+      };
+    }
   }
 
   async function getChainState() {
@@ -85,10 +217,33 @@ const HashEngine = (() => {
 
   return {
 
-    async prepareRecord(formData) {
-      const timestamp = getServerTimestamp();
+    /**
+     * checkDeviceClock()
+     * Public wrapper around the network time check, for UI callers
+     * (new-transaction.html) that want to warn the user BEFORE locking
+     * a transaction. Never throws, never blocks.
+     */
+    async checkDeviceClock() {
+      return await checkNetworkTime();
+    },
+
+    async prepareRecord(formData, clockCheck = null) {
+      const timestamp = getDeviceTimestamp();
       const receiptNumber = await DB.getNextReceiptNumber();
       const { prevHash, nextIndex } = await getChainState();
+
+      // clock_unverified = 1 whenever the network time check could not
+      // confirm the device clock was within tolerance — either because the
+      // check failed outright (offline/timeout/API error) or because it
+      // succeeded but found the clock drifted beyond the 5-minute threshold.
+      // It stays 0 only when the check ran AND found the clock to be fine.
+      const clockUnverified = (!clockCheck || !clockCheck.checked || !clockCheck.drift_ok) ? 1 : 0;
+
+      // cost_rate and profit_pkr are optional — null when not supplied.
+      // parseFloat('') returns NaN; we store null in that case so the DB
+      // column is NULL (not 0, which would be a valid — if unusual — rate).
+      const costRateRaw  = parseFloat(formData.cost_rate);
+      const profitPkrRaw = parseFloat(formData.profit_pkr);
 
       const record = {
         receipt_number  : receiptNumber,
@@ -97,6 +252,8 @@ const HashEngine = (() => {
         amount_pkr      : parseFloat(formData.amount_pkr)      || 0,
         exchange_rate   : parseFloat(formData.exchange_rate)   || 0,
         amount_usdt     : parseFloat(formData.amount_usdt)     || 0,
+        cost_rate       : isNaN(costRateRaw)  ? null : costRateRaw,
+        profit_pkr      : isNaN(profitPkrRaw) ? null : profitPkrRaw,
         client_name     : (formData.client_name     || '').trim(),
         client_cnic     : (formData.client_cnic     || '').trim(),
         bank_name       : (formData.bank_name       || '').trim(),
@@ -107,48 +264,56 @@ const HashEngine = (() => {
         timestamp       : timestamp,
         chain_index     : nextIndex,
         prev_hash       : prevHash,
-        is_locked       : 1
+        is_locked       : 1,
+        clock_unverified: clockUnverified,
+        hash_version    : HASH_VERSION   // stamped on the record for verifyRecord() to pick correctly
       };
 
-      const payload     = buildHashPayload(record, prevHash);
+      const payload     = buildHashPayload(record, prevHash);  // always v2 for new records
       record.hash       = await sha256(payload);
 
       return record;
     },
 
-    async insertTransaction(formData) {
+    async insertTransaction(formData, clockCheck = null) {
       try {
         const validation = this.validateFormData(formData);
         if (!validation.valid) {
           return { success: false, error: validation.error };
         }
 
-        const record = await this.prepareRecord(formData);
+        const record = await this.prepareRecord(formData, clockCheck);
 
         await DB.run(
           `INSERT INTO transactions (
             receipt_number, order_id, txn_type,
             amount_pkr, exchange_rate, amount_usdt,
+            cost_rate, profit_pkr,
             client_name, client_cnic,
             bank_name, bank_last4, payment_ref,
             notes, screenshot_path,
-            timestamp, hash, prev_hash, chain_index, is_locked
+            timestamp, hash, prev_hash, chain_index, is_locked, clock_unverified,
+            hash_version
           ) VALUES (
             ?, ?, ?,
             ?, ?, ?,
             ?, ?,
+            ?, ?,
             ?, ?, ?,
             ?, ?,
-            ?, ?, ?, ?, ?
+            ?, ?, ?, ?, ?, ?,
+            ?
           )`,
           [
-            record.receipt_number,  record.order_id,     record.txn_type,
-            record.amount_pkr,      record.exchange_rate, record.amount_usdt,
+            record.receipt_number,  record.order_id,      record.txn_type,
+            record.amount_pkr,      record.exchange_rate,  record.amount_usdt,
+            record.cost_rate,       record.profit_pkr,
             record.client_name,     record.client_cnic,
-            record.bank_name,       record.bank_last4,   record.payment_ref,
+            record.bank_name,       record.bank_last4,    record.payment_ref,
             record.notes,           record.screenshot_path,
-            record.timestamp,       record.hash,         record.prev_hash,
-            record.chain_index,     record.is_locked
+            record.timestamp,       record.hash,          record.prev_hash,
+            record.chain_index,     record.is_locked,      record.clock_unverified,
+            record.hash_version
           ]
         );
 
@@ -157,7 +322,8 @@ const HashEngine = (() => {
 
         AuditLog.add(
           'TRANSACTION_ADDED',
-          `Receipt: ${record.receipt_number} | Type: ${record.txn_type.toUpperCase()} | PKR: ${record.amount_pkr.toLocaleString()} | Chain: #${record.chain_index}`
+          `Receipt: ${record.receipt_number} | Type: ${record.txn_type.toUpperCase()} | PKR: ${record.amount_pkr.toLocaleString()} | Chain: #${record.chain_index}` +
+          (record.clock_unverified ? ' | ⚠ clock_unverified' : '')
         );
 
         return {
@@ -238,7 +404,9 @@ const HashEngine = (() => {
     },
 
     async verifyRecord(txn) {
-      const payload      = buildHashPayload(txn, txn.prev_hash);
+      // Use the version-aware builder — v1 records verify under the v1
+      // field order; v2 (and future) records use their own order.
+      const payload      = buildHashPayloadForRecord(txn, txn.prev_hash);
       const computedHash = await sha256(payload);
       const valid        = computedHash === txn.hash;
 
@@ -578,7 +746,8 @@ const HashEngine = (() => {
              MAX(chain_index)     as tip_index,
              MIN(timestamp)       as first_txn,
              MAX(timestamp)       as last_txn,
-             SUM(amount_pkr)      as total_volume
+             SUM(amount_pkr)      as total_volume,
+             SUM(CASE WHEN clock_unverified = 1 THEN 1 ELSE 0 END) as clock_unverified_count
            FROM transactions`
         );
         const tip = await DB.get(
@@ -591,10 +760,231 @@ const HashEngine = (() => {
           lastTxn     : row?.last_txn    || null,
           totalVolume : row?.total_volume || 0,
           tipHash     : tip?.hash        || GENESIS_HASH,
-          tipReceipt  : tip?.receipt_number || null
+          tipReceipt  : tip?.receipt_number || null,
+          clockUnverifiedCount : row?.clock_unverified_count || 0
         };
       } catch {
-        return { total: 0, tipIndex: -1, tipHash: GENESIS_HASH };
+        return { total: 0, tipIndex: -1, tipHash: GENESIS_HASH, clockUnverifiedCount: 0 };
+      }
+    },
+
+    /**
+     * getClockUnverifiedReport()
+     * Lists transactions where the device clock could not be confirmed
+     * against network time at submission (clock_unverified = 1), for
+     * surfacing in chain-integrity / reports views. Does not affect hash
+     * or chain-link verification — this is a transparency signal only.
+     */
+    async getClockUnverifiedReport() {
+      try {
+        const rows = await DB.all(
+          `SELECT chain_index, receipt_number, timestamp, txn_type, amount_pkr
+           FROM transactions
+           WHERE clock_unverified = 1
+           ORDER BY chain_index ASC`
+        );
+        return {
+          count   : rows.length,
+          records : rows
+        };
+      } catch (e) {
+        console.error('[HashEngine] getClockUnverifiedReport error:', e);
+        return { count: 0, records: [] };
+      }
+    },
+
+    // ════════════════════════════════════════════════════════
+    //  TAMPER-EVIDENCE ANCHORING
+    //  (additive — does not alter the hash chain logic above)
+    //
+    //  IMPORTANT SCOPE NOTE: everything above this point proves
+    //  INTERNAL CONSISTENCY ONLY — that each record's hash matches
+    //  its own data, and that each record correctly links to the
+    //  previous one. It cannot detect a rewrite where someone with
+    //  access to this device edits a record AND recomputes every
+    //  hash/link from that point forward to match — that produces
+    //  a chain that is perfectly "intact" by the checks above, yet
+    //  was altered. An anchor is a snapshot of the chain tip taken
+    //  at a point in time and saved OUTSIDE this device (emailed,
+    //  printed, uploaded elsewhere). Comparing a later chain state
+    //  against an old anchor is what can catch that kind of rewrite,
+    //  because the attacker cannot also go back and edit the copy
+    //  you already moved off the device.
+    // ════════════════════════════════════════════════════════
+
+    ANCHOR_LS_KEY: 'dems_last_anchor_meta',
+
+    /**
+     * Builds a small, human-and-machine-readable anchor snapshot of the
+     * current chain tip: tip index, tip hash, total record count, and the
+     * time it was taken. This is NOT the full chain — just enough to later
+     * detect if the chain has been silently rewritten up to that point.
+     */
+    async exportChainAnchor() {
+      try {
+        const summary = await this.getChainSummary();
+
+        if (summary.total === 0) {
+          return {
+            success: false,
+            error: 'Chain is empty — nothing to anchor yet.'
+          };
+        }
+
+        const anchor = {
+          anchor_version : 'DEMS-ANCHOR-v1',
+          created_at     : new Date().toISOString(),
+          tip_index      : summary.tipIndex,
+          tip_hash       : summary.tipHash,
+          tip_receipt    : summary.tipReceipt,
+          record_count   : summary.total
+        };
+
+        // Sign the anchor itself so the anchor FILE can't be silently
+        // hand-edited after the fact without detection either.
+        const anchorPayload = [
+          anchor.anchor_version,
+          anchor.created_at,
+          String(anchor.tip_index),
+          anchor.tip_hash,
+          anchor.tip_receipt || '',
+          String(anchor.record_count),
+          SALT
+        ].join('|');
+        anchor.anchor_signature = await sha256(anchorPayload);
+
+        // Remember locally that an anchor was taken, so the dashboard can
+        // remind the user if it's been too long since the last one.
+        try {
+          localStorage.setItem(this.ANCHOR_LS_KEY, JSON.stringify({
+            takenAt  : anchor.created_at,
+            tipIndex : anchor.tip_index,
+            tipHash  : anchor.tip_hash
+          }));
+        } catch (e) { /* localStorage unavailable — non-fatal */ }
+
+        AuditLog.add(
+          'CHAIN_ANCHOR_EXPORTED',
+          `Tip: #${anchor.tip_index} (${anchor.tip_receipt || '—'}) | Records: ${anchor.record_count}`
+        );
+
+        return { success: true, anchor: anchor };
+
+      } catch (e) {
+        console.error('[HashEngine] exportChainAnchor error:', e);
+        return { success: false, error: e.message };
+      }
+    },
+
+    /**
+     * Checks whether an anchor file is internally well-formed and signed
+     * correctly (i.e. hasn't itself been hand-edited since export).
+     */
+    async _verifyAnchorSignature(anchor) {
+      if (!anchor || !anchor.anchor_version || !anchor.anchor_signature) {
+        return false;
+      }
+      const payload = [
+        anchor.anchor_version,
+        anchor.created_at,
+        String(anchor.tip_index),
+        anchor.tip_hash,
+        anchor.tip_receipt || '',
+        String(anchor.record_count),
+        SALT
+      ].join('|');
+      const expected = await sha256(payload);
+      return expected === anchor.anchor_signature;
+    },
+
+    /**
+     * Compares a previously saved anchor against the CURRENT chain state.
+     * Three distinct outcomes are possible:
+     *   - MATCH: the record that was at the anchor's tip index still has
+     *     exactly the hash the anchor recorded. Nothing covered by this
+     *     anchor has been altered.
+     *   - MISMATCH: a record exists at that index but its hash differs,
+     *     or that part of the chain is missing entirely. This means
+     *     something covered by the anchor changed after the anchor was
+     *     taken — the strongest signal of off-device-undetectable
+     *     tampering this app can give you.
+     *   - ANCHOR_INVALID: the anchor file itself fails its own signature
+     *     check, so it can't be trusted as a reference point at all.
+     */
+    async verifyAgainstAnchor(anchor) {
+      try {
+        const sigOk = await this._verifyAnchorSignature(anchor);
+        if (!sigOk) {
+          return {
+            status  : 'ANCHOR_INVALID',
+            message : 'This anchor file failed its own signature check — it may be corrupted or hand-edited, and cannot be used as a trusted reference point.'
+          };
+        }
+
+        const recordAtAnchor = await DB.get(
+          `SELECT * FROM transactions WHERE chain_index = ?`,
+          [anchor.tip_index]
+        );
+
+        if (!recordAtAnchor) {
+          return {
+            status     : 'MISMATCH',
+            message    : `No record exists at chain index #${anchor.tip_index} anymore. The chain has changed since this anchor (${anchor.created_at}) was taken — possibly records were deleted.`,
+            anchor     : anchor,
+            currentTip : (await this.getChainSummary()).tipIndex
+          };
+        }
+
+        const matches = recordAtAnchor.hash === anchor.tip_hash;
+
+        AuditLog.add(
+          'CHAIN_ANCHOR_VERIFIED',
+          `Anchor tip #${anchor.tip_index} (${anchor.created_at}) | Result: ${matches ? 'MATCH' : 'MISMATCH'}`
+        );
+
+        if (!matches) {
+          return {
+            status  : 'MISMATCH',
+            message : `Record at chain index #${anchor.tip_index} no longer matches the hash saved in this anchor from ${anchor.created_at}. Data covered by this anchor was altered after it was taken.`,
+            anchor  : anchor,
+            anchorHash  : anchor.tip_hash,
+            currentHash : recordAtAnchor.hash
+          };
+        }
+
+        return {
+          status  : 'MATCH',
+          message : `Chain index #${anchor.tip_index} still matches the hash recorded in this anchor from ${anchor.created_at}. Everything up to that point is consistent with what was anchored.`,
+          anchor  : anchor
+        };
+
+      } catch (e) {
+        console.error('[HashEngine] verifyAgainstAnchor error:', e);
+        return { status: 'ERROR', message: 'Anchor verification error: ' + e.message };
+      }
+    },
+
+    /**
+     * Returns metadata about the last anchor taken on this device (if any),
+     * and whether it's overdue (>24h old), for dashboard reminder UI.
+     */
+    getLastAnchorMeta() {
+      try {
+        const raw = localStorage.getItem(this.ANCHOR_LS_KEY);
+        if (!raw) return { hasAnchor: false, overdue: true };
+
+        const meta = JSON.parse(raw);
+        const ageMs = Date.now() - new Date(meta.takenAt).getTime();
+        const overdue = ageMs > 24 * 60 * 60 * 1000;
+
+        return {
+          hasAnchor : true,
+          takenAt   : meta.takenAt,
+          tipIndex  : meta.tipIndex,
+          overdue   : overdue
+        };
+      } catch (e) {
+        return { hasAnchor: false, overdue: true };
       }
     }
 

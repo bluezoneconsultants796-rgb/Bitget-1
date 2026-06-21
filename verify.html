@@ -85,6 +85,17 @@ body {
 
 /* helper back to app link */
 .back-btn-box { text-align: center; margin-top: 32px; padding-top: 20px; border-top: 1px solid var(--border-soft); }
+
+.scope-note {
+  margin-top: 24px;
+  padding: 14px 16px;
+  background: rgba(107,128,153,0.06);
+  border: 1px solid rgba(107,128,153,0.18);
+  border-radius: var(--radius-lg);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
 </style>
 </head>
 <body>
@@ -181,6 +192,12 @@ body {
         </tr>
       </tbody>
     </table>
+  </div>
+
+  <div class="scope-note">
+    This check confirms the record's stored signature and chain link are
+    internally consistent — it does not certify that the underlying data was
+    never altered by someone with direct access to the system that issued it.
   </div>
 
   <div class="back-btn-box">

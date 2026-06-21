@@ -258,6 +258,7 @@
                 <th>PKR Volume</th>
                 <th>Rate</th>
                 <th>USDT Volume</th>
+                <th>Profit (PKR)</th>
                 <th>Action</th>
               </tr>
             </thead>
@@ -426,6 +427,7 @@ function filterLedger() {
         <td class="mono font-semibold">₨ ${parseFloat(t.amount_pkr).toLocaleString('en-PK', {minimumFractionDigits:1})}</td>
         <td class="mono" style="color:var(--muted);">${parseFloat(t.exchange_rate).toFixed(3)}</td>
         <td class="mono" style="font-weight:600; color:var(--blue);">${parseFloat(t.amount_usdt).toFixed(2)} USDT</td>
+        <td class="mono" style="font-weight:600;${profitColor(t.profit_pkr)}">${fmtProfit(t.profit_pkr)}</td>
         <td>
           <a class="btn-secondary btn-sm" href="receipt.html?receipt=${encodeURIComponent(t.receipt_number)}" style="padding:4px 8px; font-size:11px;">🔍 View Block</a>
         </td>
@@ -443,7 +445,7 @@ function exportLedgerCsv() {
     return;
   }
 
-  const headers = ['Chain Index', 'Receipt Number', 'Order ID', 'Timestamp', 'Type', 'Amount PKR', 'Rate', 'Amount USDT', 'Client Name', 'Client CNIC', 'Bank Name', 'Bank Account Last4', 'Payment Ref', 'Block Hash'];
+  const headers = ['Chain Index', 'Receipt Number', 'Order ID', 'Timestamp', 'Type', 'Amount PKR', 'Rate', 'Amount USDT', 'Cost Rate', 'Profit PKR', 'Client Name', 'Client CNIC', 'Bank Name', 'Bank Account Last4', 'Payment Ref', 'Block Hash'];
   
   const csvRows = [headers.join(',')];
 
@@ -457,6 +459,8 @@ function exportLedgerCsv() {
       t.amount_pkr,
       t.exchange_rate,
       t.amount_usdt,
+      (t.cost_rate === null || t.cost_rate === undefined) ? '' : t.cost_rate,
+      (t.profit_pkr === null || t.profit_pkr === undefined) ? '' : t.profit_pkr,
       `"${(t.client_name || '').replace(/"/g, '""')}"`,
       `"${t.client_cnic || ''}"`,
       `"${t.bank_name || ''}"`,
@@ -482,6 +486,23 @@ function exportLedgerCsv() {
 // ── UTILITIES ─────────────────────────────────────────────
 function setTxt(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Profit display: NULL/blank shows as "—" rather than 0, since a missing
+// profit figure is not the same as a confirmed zero-profit transaction.
+function fmtProfit(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  const n = parseFloat(v);
+  if (isNaN(n)) return '—';
+  return `₨ ${n.toLocaleString('en-PK', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+}
+function profitColor(v) {
+  if (v === null || v === undefined || v === '') return ' color:var(--muted);';
+  const n = parseFloat(v);
+  if (isNaN(n)) return ' color:var(--muted);';
+  if (n > 0) return ' color:var(--green);';
+  if (n < 0) return ' color:#FCA5A5;';
+  return ' color:var(--muted);';
+}
 
 function setupSession() {
   function tick() {

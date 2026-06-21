@@ -293,12 +293,35 @@
             </div>
           </div>
 
-          <div class="maint-tool" style="border-bottom:none;">
-            <div class="maint-txt">
-              <div class="maint-name" style="color:var(--red);">Clear All local Data (Factory Reset)</div>
-              <div class="maint-desc">Wipes physical localStorage keys (including cryptographic credentials constraints and settings) to reset node completely.</div>
+          <div class="maint-tool" style="border-bottom:none; flex-direction:column; align-items:stretch; gap:14px;">
+
+            <!-- PERMANENT IMMUTABILITY NOTICE — not dismissible, no delete option exists below it -->
+            <div style="display:flex; gap:12px; align-items:flex-start; padding:14px 16px; border-radius:var(--radius-md); background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.25);">
+              <div style="font-size:20px; line-height:1;">🔒</div>
+              <div style="font-size:12px; line-height:1.6; color:var(--muted);">
+                <strong style="color:var(--red); display:block; margin-bottom:4px;">Financial records cannot be deleted from this system.</strong>
+                Transactions, receipts, the verification log, and the audit log are permanent by design (<span style="font-family:var(--font-mono); font-size:11px;">noDeleteAllowed</span> / <span style="font-family:var(--font-mono); font-size:11px;">transactionImmutable</span>). No control in this app — including the option below — can erase them. This is intentional and cannot be overridden from the UI.
+              </div>
             </div>
-            <button class="btn-danger" onclick="triggerFactoryReset()">🚨 Wipe Session & DB</button>
+
+            <!-- ARCHIVE INSTEAD OF DELETE -->
+            <div class="maint-tool" style="border-bottom:none; padding:0;">
+              <div class="maint-txt">
+                <div class="maint-name">Starting a Fresh Financial Period?</div>
+                <div class="maint-desc">Don't delete old data — export a full backup of the database first, then move that file to archival storage (e.g. cold storage, a separate encrypted drive). The ledger here stays complete and queryable; archiving just relocates your <em>copy</em> of closed-period data out of daily view.</div>
+              </div>
+              <button class="btn-secondary" onclick="exportDataFile()">📦 Export Full Backup</button>
+            </div>
+
+            <!-- APP CONFIG RESET (renamed/scoped from old Factory Reset) -->
+            <div class="maint-tool" style="border-bottom:none; padding:0; border-top:1px dashed var(--border-soft); padding-top:14px;">
+              <div class="maint-txt">
+                <div class="maint-name" style="color:var(--red);">Reset App Configuration & Login</div>
+                <div class="maint-desc">Clears business profile, PIN/password, and app settings only — for "I'm locked out / misconfigured the setup" cases. <strong style="color:var(--white);">Does not touch transactions, receipts, verification log, or audit log.</strong> You'll be returned to onboarding to set up credentials again.</div>
+              </div>
+              <button class="btn-danger" onclick="triggerFactoryReset()">⚙️ Reset Config & Login Only</button>
+            </div>
+
           </div>
         </div>
 
@@ -507,23 +530,52 @@ async function importDataFile(event) {
   reader.readAsArrayBuffer(file);
 }
 
-// ── FACTORY RESET NODE ──
-function triggerFactoryReset() {
-  const promptValue = prompt('🚨 ADVANCED ACTION REQUIRED! 🚨\n\nThis will completely wipe out the system, erasing your database, block receipts, credentials, and audits. This is permanent.\n\nTo continue, type exactly: RESET ALL');
-  if (promptValue !== 'RESET ALL') {
-    Toast.show('Wipe canceled. Override passcodes misaligned.', 'info');
+// ── RESET APP CONFIGURATION & LOGIN (scoped — NOT a data wipe) ──
+// CRITICAL: this function must NEVER remove the 'dems_sqlite_db' key or
+// otherwise touch transactions / receipts / verification_log / audit_log.
+// Those tables are permanent by design (noDeleteAllowed / transactionImmutable
+// in app-config.json). Only app_settings (via DB.resetAppConfigOnly()) and
+// the credential/session localStorage keys below are in scope.
+async function triggerFactoryReset() {
+  const promptValue = prompt('⚙️ RESET APP CONFIGURATION & LOGIN\n\nThis clears your business profile, PIN/password, and app settings, then returns you to onboarding.\n\nYour transaction ledger, receipts, verification log, and audit log are NEVER deleted by this action — they are permanent by design and are not affected.\n\nTo continue, type exactly: RESET CONFIG');
+  if (promptValue !== 'RESET CONFIG') {
+    Toast.show('Reset canceled. Confirmation phrase did not match.', 'info');
     return;
   }
 
-  // Clear localStorage keys
-  localStorage.removeItem('dems_sqlite_db');
+  let resetSummary = null;
+  try {
+    // Scoped DB-level reset — only ever clears app_settings.
+    resetSummary = await DB.resetAppConfigOnly();
+  } catch (e) {
+    Toast.show('Could not reset app settings: ' + e.message, 'error');
+    return;
+  }
+
+  // Credential / session localStorage keys ONLY — never 'dems_sqlite_db'.
   localStorage.removeItem('dems_business_profile');
   localStorage.removeItem('dems_session');
   localStorage.removeItem('dems_lockout_attempts');
   localStorage.removeItem('dems_credentials_pin_hash');
   localStorage.removeItem('dems_credentials_password_hash');
 
-  alert('⚡ Node completely reset. All local storage is purged. Redirecting to onboarding setup.');
+  // High-severity audit entry regardless of how little or much was actually
+  // cleared — this is a security-relevant action and must always be logged.
+  try {
+    await AuditLog.add(
+      'APP_CONFIG_RESET',
+      `SEVERITY: HIGH | Cleared app_settings (${resetSummary?.clearedRows ?? '?'} rows) + credential/session keys | ` +
+      `Protected tables untouched — transactions: ${resetSummary?.survivingCounts?.transactions ?? '?'}, ` +
+      `receipts: ${resetSummary?.survivingCounts?.receipts ?? '?'}, ` +
+      `verification_log: ${resetSummary?.survivingCounts?.verification_log ?? '?'}, ` +
+      `audit_log: ${resetSummary?.survivingCounts?.audit_log ?? '?'}`
+    );
+  } catch (e) {
+    // Even if logging fails, do not block the reset — but warn loudly.
+    console.error('[Settings] Failed to write audit log for APP_CONFIG_RESET:', e);
+  }
+
+  alert('⚙️ App configuration and login have been reset. Your transaction ledger, receipts, verification log, and audit log were not touched. Redirecting to onboarding setup.');
   window.location.href = 'index.html';
 }
 

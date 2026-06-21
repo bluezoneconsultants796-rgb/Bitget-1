@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chain Integrity — Exchange MS</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+  /* ── Page Layout ── */
+  .app-shell { display: flex; min-height: 100vh; }
+  
+  .sidebar {
+    width: 220px; flex-shrink: 0;
+    background: var(--navy-2);
+    border-right: 1px solid var(--border);
+    padding: 24px 12px;
+    position: fixed; top: 0; left: 0; height: 100vh;
+    overflow-y: auto; z-index: 100;
+    display: flex; flex-direction: column;
+    transition: left 0.25s;
+  }
+  .sidebar-brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 8px 20px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
+  }
+  .sb-logo { font-size: 22px; color: var(--blue); }
+  .sb-name { font-family: var(--font-display); font-size: 15px; font-weight: 700; color: var(--white); line-height: 1.1; }
+  .sb-name small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+  
+  .nav-group-label {
+    font-size: 10px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.1em;
+    padding: 0 8px; margin: 16px 0 6px;
+  }
+  
+  .nav-item {
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 10px; border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 500; color: var(--muted);
+    text-decoration: none; transition: all 0.15s; margin-bottom: 2px;
+    background: none; border: none; cursor: pointer; width: 100%; text-align: left;
+  }
+  .nav-item:hover { background: var(--blue-glow); color: var(--white); text-decoration: none; }
+  .nav-item.active { background: var(--blue-glow); color: var(--blue); border: 1px solid rgba(14,165,233,0.2); }
+  .nav-icon { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
+  
+  .sidebar-footer { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); }
+  .session-pill {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--muted); padding: 6px 10px; margin-bottom: 4px;
+  }
+  .session-pill span { color: var(--gold); font-family: var(--font-mono); }
+
+  .main-area { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+
+  /* ── Top Bar ── */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 32px;
+    background: var(--navy-2);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .page-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 17px;
+    font-weight: 700;
+  }
+  .page-title span { color: var(--blue); }
+  .topbar-badge {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 100px;
+    background: rgba(245,158,11,0.12);
+    border: 1px solid rgba(245,158,11,0.25);
+    color: var(--gold);
+  }
+
+  /* ── Main Container ── */
+  .main {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+    width: 100%;
+  }
+
+  /* ── STATUS CARD ── */
+  .status-card {
+    border-radius: 16px;
+    padding: 28px 32px;
+    margin-bottom: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    flex-wrap: wrap;
+    border: 2px solid;
+    transition: all 0.4s;
+  }
+  .status-card.intact {
+    background: rgba(16,185,129,0.06);
+    border-color: rgba(16,185,129,0.35);
+  }
+  .status-card.compromised {
+    background: rgba(239,68,68,0.06);
+    border-color: rgba(239,68,68,0.35);
+  }
+  .status-card.loading {
+    background: rgba(14,165,233,0.06);
+    border-color: rgba(14,165,233,0.2);
+  }
+  .status-card.empty {
+    background: rgba(107,128,153,0.06);
+    border-color: rgba(107,128,153,0.2);
+  }
+  .status-icon {
+    font-size: 40px;
+    flex-shrink: 0;
+  }
+  .status-info { flex: 1; min-width: 200px; }
+  .status-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .status-card.intact    .status-label { color: var(--green); }
+  .status-card.compromised .status-label { color: var(--red); }
+  .status-card.loading   .status-label { color: var(--blue); }
+  .status-card.empty     .status-label { color: var(--muted); }
+  .status-message {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+  .status-time {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+    font-family: var(--font-mono);
+  }
+  .verify-act-btn {
+    background: var(--blue);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 10px 20px;
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .verify-act-btn:hover:not(:disabled) { background: #38BDF8; transform: translateY(-1px); }
+  .verify-act-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── STATS ROW ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+  .stat-card {
+    background: var(--navy-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .stat-card .s-label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .stat-card .s-value {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 24px;
+    font-weight: 700;
+  }
+  .stat-card .s-sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .s-blue   { color: var(--blue); }
+  .s-green  { color: var(--green); }
+  .s-gold   { color: var(--gold); }
+  .s-red    { color: var(--red); }
+
+  /* ── PROGRESS BAR ── */
+  .progress-wrap {
+    background: var(--navy-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+    display: none;
+  }
+  .progress-wrap.visible { display: block; }
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+  .progress-label span { color: var(--muted); }
+  .progress-label strong { color: var(--blue); font-family: 'JetBrains Mono', monospace; }
+  .progress-bar {
+    height: 6px;
+    background: rgba(14,165,233,0.1);
+    border-radius: 100px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--blue), #38BDF8);
+    border-radius: 100px;
+    transition: width 0.3s ease;
+    width: 0%;
+  }
+
+  /* ── SECTION TITLE ── */
+  .section-eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--blue);
+    margin-bottom: 8px;
+  }
+  .section-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 18px;
+  }
+
+  /* ── CHAIN TABLE ── */
+  .chain-table-wrap {
+    background: var(--navy-2);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .chain-table-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .chain-table-header h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .search-input {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-size: 13px;
+    color: var(--white);
+    font-family: 'Inter', sans-serif;
+    outline: none;
+    width: 200px;
+    transition: border-color 0.2s;
+  }
+  .search-input::placeholder { color: var(--muted); }
+  .search-input:focus { border-color: var(--blue); }
+
+  table { width: 100%; border-collapse: collapse; }
+  thead { background: rgba(255,255,255,0.02); }
+  th {
+    text-align: left;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  td {
+    padding: 12px 16px;
+    font-size: 12.5px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    vertical-align: middle;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .badge-ok {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(16,185,129,0.1);
+    border: 1px solid rgba(16,185,129,0.25);
+    color: var(--green);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 100px;
+    white-space: nowrap;
+  }
+  .badge-tampered {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.25);
+    color: #F87171;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 100px;
+    white-space: nowrap;
+  }
+  .hash-mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--blue);
+    opacity: 0.85;
+  }
+  .receipt-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--gold);
+  }
+  .chain-idx {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .ts-mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+
+  .link-ok     { color: var(--green); font-size: 14px; }
+  .link-broken { color: var(--red);   font-size: 14px; }
+
+  .table-empty {
+    padding: 52px 24px;
+    text-align: center;
+    color: var(--muted);
+  }
+  .table-empty .empty-icon { font-size: 36px; margin-bottom: 14px; }
+  .table-empty p { font-size: 14px; }
+
+  .genesis-row td {
+    background: rgba(245,158,11,0.04);
+    border-bottom: 2px solid rgba(245,158,11,0.15) !important;
+  }
+  .genesis-badge {
+    display: inline-block;
+    background: rgba(245,158,11,0.12);
+    border: 1px solid rgba(245,158,11,0.25);
+    color: var(--gold);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  .mobile-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 99; }
+  .mobile-overlay.show { display: block; }
+
+  @media (max-width: 768px) {
+    .sidebar { left: -220px; }
+    .sidebar.open { left: 0; }
+    .main-area { margin-left: 0; }
+    .status-card { padding: 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="mobile-overlay" id="mobileOverlay"></div>
+
+<div class="app-shell">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="sb-logo" id="sbLogo">⬡</span>
+      <div class="sb-name"><span id="sbBizName">Exchange</span><small>DEMS v1.0</small></div>
+    </div>
+
+    <span class="nav-group-label">Main</span>
+    <a href="dashboard.html" class="nav-item"><span class="nav-icon">📊</span> Dashboard</a>
+    <a href="new-transaction.html" class="nav-item"><span class="nav-icon">➕</span> New Transaction</a>
+    <a href="transactions.html" class="nav-item"><span class="nav-icon">📋</span> All Transactions</a>
+    <a href="clients.html" class="nav-item"><span class="nav-icon">👤</span> Client KYC</a>
+
+    <span class="nav-group-label">System</span>
+    <a href="chain-integrity.html" class="nav-item active"><span class="nav-icon">🔗</span> Chain Integrity</a>
+    <a href="reports.html" class="nav-item"><span class="nav-icon">📑</span> Reports</a>
+    <a href="settings.html" class="nav-item"><span class="nav-icon">⚙️</span> Settings</a>
+    <a href="audit-log-view.html" class="nav-item"><span class="nav-icon">📁</span> Audit Logs</a>
+
+    <div class="sidebar-footer">
+      <div class="session-pill">Session: <span id="sessionTimer">--:--</span></div>
+      <button class="nav-item" id="logoutBtn"><span class="nav-icon">🚪</span> Logout</button>
+    </div>
+  </nav>
+
+  <!-- MAIN AREA -->
+  <div class="main-area">
+
+    <!-- TOP BAR -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <button class="nav-item" style="display:none;" id="mobileMenuBtn">☰</button>
+        <div class="page-title">Chain <span>Integrity</span></div>
+      </div>
+      <div class="topbar-badge">Phase 02 — Hash Engine</div>
+    </div>
+
+    <!-- MAIN -->
+    <div class="main">
+
+      <!-- STATUS CARD -->
+      <div class="status-card loading" id="statusCard">
+        <div class="status-icon" id="statusIcon">⏳</div>
+        <div class="status-info">
+          <div class="status-label" id="statusLabel">Running startup check…</div>
+          <div class="status-message" id="statusMessage">Verifying chain integrity…</div>
+          <div class="status-time" id="statusTime"></div>
+        </div>
+        <button class="verify-act-btn" id="verifyBtn" onclick="runFullVerify()" disabled>
+          🔍 Full Verify
+        </button>
+      </div>
+
+      <!-- PROGRESS BAR -->
+      <div class="progress-wrap" id="progressWrap">
+        <div class="progress-label">
+          <span id="progressLabel">Verifying records…</span>
+          <strong id="progressPct">0%</strong>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+      </div>
+
+      <!-- STATS ROW -->
+      <div class="stats-row" id="statsRow">
+        <div class="stat-card">
+          <div class="s-label">Total Records</div>
+          <div class="s-value s-blue" id="statTotal">—</div>
+          <div class="s-sub">in chain</div>
+        </div>
+        <div class="stat-card">
+          <div class="s-label">Verified OK</div>
+          <div class="s-value s-green" id="statVerified">—</div>
+          <div class="s-sub">records</div>
+        </div>
+        <div class="stat-card">
+          <div class="s-label">Tampered</div>
+          <div class="s-value s-red" id="statTampered">—</div>
+          <div class="s-sub">detected</div>
+        </div>
+        <div class="stat-card">
+          <div class="s-label">Chain Tip</div>
+          <div class="s-value s-gold" id="statTip" style="font-size:14px;">—</div>
+          <div class="s-sub" id="statTipHash">—</div>
+        </div>
+      </div>
+
+      <!-- CHAIN RECORD TABLE -->
+      <div class="section-eyebrow">Hash Chain</div>
+      <div class="section-title">Verified Transaction Ledger</div>
+
+      <div class="chain-table-wrap">
+        <div class="chain-table-header">
+          <h3>Immutable Chain Ledger</h3>
+          <input class="search-input" id="searchInput" type="text"
+                 placeholder="Search receipt…" oninput="filterTable()">
+        </div>
+        <div id="tableContainer">
+          <div class="table-empty">
+            <div class="empty-icon">🔗</div>
+            <p>Loading chain data…</p>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /main -->
+  </div><!-- /main-area -->
+</div><!-- /app-shell -->
+
+<!-- SCRIPTS: load DB + engine first, then page logic -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+<script src="db.js"></script>
+<script src="audit-log.js"></script>
+<script src="profile.js"></script>
+<script src="auth.js"></script>
+<script src="hash-engine.js"></script>
+
+<script>
+// ══════════════════════════════════════════════════════════
+//  chain-integrity.html — Page Logic
+// ══════════════════════════════════════════════════════════
+
+let _allRows  = [];
+let _lastReport = null;
+
+// ── BOOT ───────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  // CRITICAL Security Requirement: Auth requirement must be evaluated immediately at boot
+  if (!Auth.requireAuth()) return;
+
+  await DB.init();
+
+  // Load business info in sidebar from camelCase keys
+  try {
+    const p = await Profile.get();
+    if (p) {
+      document.getElementById('sbLogo').textContent = p.logoEmoji || '⬡';
+      document.getElementById('sbBizName').textContent = p.businessName || 'Exchange';
+    }
+  } catch(e) {}
+
+  setupSessionTimer();
+
+  // Run startup check first
+  const check = await HashEngine.startupCheck();
+  setStatusCard(check.ok, check.status, check.message, 0);
+
+  // Load chain summary into stats
+  await refreshStats();
+
+  // Load chain table
+  await refreshTable();
+
+  // Enable verify button
+  document.getElementById('verifyBtn').disabled = false;
+});
+
+// ── STATUS CARD ────────────────────────────────────────────
+function setStatusCard(ok, status, message, ms) {
+  const card    = document.getElementById('statusCard');
+  const icon    = document.getElementById('statusIcon');
+  const label   = document.getElementById('statusLabel');
+  const msg     = document.getElementById('statusMessage');
+  const timeEl  = document.getElementById('statusTime');
+
+  card.className = 'status-card';
+
+  if (status === 'EMPTY') {
+    card.classList.add('empty');
+    icon.textContent  = '🔗';
+    label.textContent = 'No Transactions';
+    msg.textContent   = 'Chain is empty. Register transactions to start the security chain.';
+    timeEl.textContent = '';
+  } else if (ok) {
+    card.classList.add('intact');
+    icon.textContent  = '✅';
+    label.textContent = 'Chain Intact';
+    msg.textContent   = message;
+    timeEl.textContent = ms ? `Verified in ${ms}ms` : '';
+  } else if (status === 'ERROR') {
+    card.classList.add('loading');
+    icon.textContent  = '⚠️';
+    label.textContent = 'Error';
+    msg.textContent   = message;
+    timeEl.textContent = '';
+  } else {
+    card.classList.add('compromised');
+    icon.textContent  = '🚨';
+    label.textContent = 'Chain Compromised';
+    msg.textContent   = message;
+    timeEl.textContent = ms ? `Verified in ${ms}ms` : '';
+  }
+}
+
+// ── STATS ROW ──────────────────────────────────────────────
+async function refreshStats() {
+  const summary = await HashEngine.getChainSummary();
+
+  document.getElementById('statTotal').textContent    = summary.total;
+  document.getElementById('statVerified').textContent = _lastReport ? _lastReport.verified  : (summary.total > 0 ? '—' : '0');
+  document.getElementById('statTampered').textContent = _lastReport ? _lastReport.tampered  : '0';
+  document.getElementById('statTip').textContent      = summary.tipReceipt || 'Genesis';
+  document.getElementById('statTipHash').textContent  = HashEngine.formatHashShort(summary.tipHash);
+}
+
+// ── TABLE ──────────────────────────────────────────────────
+async function refreshTable() {
+  const txns = await DB.all(
+    `SELECT * FROM transactions ORDER BY chain_index DESC`
+  );
+  _allRows = txns;
+  renderTable(txns);
+}
+
+function renderTable(txns) {
+  const container = document.getElementById('tableContainer');
+
+  if (!txns || txns.length === 0) {
+    container.innerHTML = `
+      <div class="table-empty">
+        <div class="empty-icon">🔗</div>
+        <p>No transactions registered in the chain yet.</p>
+      </div>`;
+    return;
+  }
+
+  const reportMap = {};
+  if (_lastReport && _lastReport.results) {
+    _lastReport.results.forEach(r => {
+      reportMap[r.chainIndex] = r;
+    });
+  }
+
+  const rows = txns.map(t => {
+    const rpt        = reportMap[t.chain_index];
+    const isGenesis  = t.chain_index === 0;
+
+    const statusBadge = rpt
+      ? (rpt.intact
+          ? `<span class="badge-ok">✓ Intact</span>`
+          : `<span class="badge-tampered">✗ Tampered</span>`)
+      : `<span style="color:var(--muted);font-size:11px;">—</span>`;
+
+    const linkIcon = rpt
+      ? (rpt.linkValid
+          ? `<span class="link-ok" title="Chain link valid">✓</span>`
+          : `<span class="link-broken" title="Chain link broken — possible deletion or modification">✗</span>`)
+      : `<span style="color:var(--muted);font-size:12px;">?</span>`;
+
+    const rowClass = isGenesis ? 'genesis-row' : '';
+    const genesisBadge = isGenesis ? `<span class="genesis-badge">Genesis</span>` : '';
+
+    const tsShort = t.timestamp
+      ? t.timestamp.replace('T', ' ').substring(0, 19) + ' UTC'
+      : '—';
+
+    return `
+      <tr class="${rowClass}">
+        <td>
+          <span class="chain-idx">#${t.chain_index}</span>
+          ${genesisBadge}
+        </td>
+        <td><span class="receipt-num">${t.receipt_number}</span></td>
+        <td><span style="color:${t.txn_type === 'buy' ? 'var(--green)' : 'var(--gold)'}; font-size:11px; font-weight:600; text-transform:uppercase;">${t.txn_type}</span></td>
+        <td style="font-weight:600;">PKR ${Number(t.amount_pkr).toLocaleString()}</td>
+        <td><span class="hash-mono">${HashEngine.formatHashShort(t.hash)}</span></td>
+        <td>${linkIcon}</td>
+        <td>${statusBadge}</td>
+        <td><span class="ts-mono">${tsShort}</span></td>
+      </tr>`;
+  }).join('');
+
+  container.innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>#Index</th>
+          <th>Receipt</th>
+          <th>Type</th>
+          <th>Amount</th>
+          <th>Hash (SHA-256)</th>
+          <th>Link</th>
+          <th>Status</th>
+          <th>Timestamp</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function filterTable() {
+  const q = document.getElementById('searchInput').value.toLowerCase().trim();
+  if (!q) { renderTable(_allRows); return; }
+  const filtered = _allRows.filter(t =>
+    (t.receipt_number || '').toLowerCase().includes(q) ||
+    (t.client_name    || '').toLowerCase().includes(q) ||
+    (t.txn_type       || '').toLowerCase().includes(q) ||
+    String(t.chain_index).includes(q)
+  );
+  renderTable(filtered);
+}
+
+// ── FULL CHAIN VERIFY ──────────────────────────────────────
+async function runFullVerify() {
+  const btn       = document.getElementById('verifyBtn');
+  const progWrap  = document.getElementById('progressWrap');
+  const progLabel = document.getElementById('progressLabel');
+  const progPct   = document.getElementById('progressPct');
+  const progFill  = document.getElementById('progressFill');
+
+  btn.disabled  = true;
+  btn.innerHTML = '⏳ Verifying…';
+  progWrap.classList.add('visible');
+
+  const onProgress = (current, total, pct) => {
+    progLabel.textContent = `Verifying record ${current} of ${total}…`;
+    progPct.textContent   = pct + '%';
+    progFill.style.width  = pct + '%';
+  };
+
+  const report = await HashEngine.verifyChain(onProgress);
+  _lastReport  = report;
+
+  progWrap.classList.remove('visible');
+  progFill.style.width = '0%';
+
+  setStatusCard(report.chainIntact, report.status, report.message, report.verificationTime);
+
+  document.getElementById('statVerified').textContent  = report.verified;
+  document.getElementById('statTampered').textContent  = report.tampered;
+
+  await refreshStats();
+  renderTable(_allRows);
+
+  btn.disabled  = false;
+  btn.innerHTML = '🔍 Full Verify';
+}
+
+function setupSessionTimer() {
+  function tick() {
+    try {
+      const raw = localStorage.getItem('dems_session');
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      const left = Math.max(0, Math.floor((s.expiresAt - Date.now()) / 1000));
+      const m = Math.floor(left/60), sec = left%60;
+      document.getElementById('sessionTimer').textContent = m + ':' + String(sec).padStart(2,'0');
+    } catch(e) {}
+  }
+  tick(); setInterval(tick, 1000);
+}
+
+document.getElementById('logoutBtn').addEventListener('click', () => {
+  Auth.logout();
+});
+</script>
+</body>
+</html>

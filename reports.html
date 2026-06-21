@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reports & Financial Analytics — DEMS</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+/* ── LAYOUT ─────────────────────────────────────────────── */
+.app-shell { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 220px; flex-shrink: 0;
+  background: var(--navy-2);
+  border-right: 1px solid var(--border);
+  padding: 24px 12px;
+  position: fixed; top: 0; left: 0; height: 100vh;
+  overflow-y: auto; z-index: 100;
+  display: flex; flex-direction: column;
+  transition: left 0.25s;
+}
+.sidebar-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 8px 20px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
+}
+.sb-logo { font-size: 22px; color: var(--blue); }
+.sb-name { font-family: var(--font-display); font-size: 15px; font-weight: 700; color: var(--white); line-height: 1.1; }
+.sb-name small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+.nav-group-label {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  padding: 0 8px; margin: 16px 0 6px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 10px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 500; color: var(--muted);
+  text-decoration: none; transition: all 0.15s; margin-bottom: 2px;
+  background: none; border: none; cursor: pointer; width: 100%; text-align: left;
+}
+.nav-item:hover { background: var(--blue-glow); color: var(--white); text-decoration: none; }
+.nav-item.active { background: var(--blue-glow); color: var(--blue); border: 1px solid rgba(14,165,233,0.2); }
+.nav-icon { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
+.sidebar-footer { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); }
+.session-pill { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); padding: 6px 10px; margin-bottom: 4px; }
+.session-pill span { color: var(--gold); font-family: var(--font-mono); }
+
+.main-area { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ── PAGE TOPBAR ────────────────────────────────────────── */
+.page-topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(8,15,28,0.92); backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px; height: 60px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.ptb-left { display: flex; align-items: center; gap: 14px; }
+.ptb-title { font-family: var(--font-display); font-size: 17px; font-weight: 700; color: var(--white); }
+.ptb-sub { font-size: 12px; color: var(--muted); }
+.mobile-menu-btn { display: none; background: none; border: none; color: var(--white); font-size: 20px; cursor: pointer; padding: 4px 8px; }
+
+/* ── REPORT VIEW LAYOUT ─────────────────────────────────── */
+.page-body { padding: 32px; max-width: 1200px; width: 100%; margin: 0 auto; }
+
+.section-card {
+  background: var(--navy-2); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 24px 28px; margin-bottom: 24px;
+}
+.section-title {
+  font-family: var(--font-display); font-size: 14px; font-weight: 700; color: var(--blue);
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 20px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border-soft);
+}
+
+.report-controls { display: grid; grid-template-columns: 1.5fr 1fr 1fr auto; gap: 16px; align-items: flex-end; }
+.form-group { margin-bottom: 14px; }
+.form-group:last-child { margin-bottom: 0; }
+.form-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; display: block; }
+
+/* Metrics stats summary grid */
+.metric-report-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin: 24px 0; }
+.metric-box { background: var(--navy-3); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 18px 20px; }
+.mb-lbl { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.mb-val { font-family: var(--font-display); font-size: 20px; font-weight: 700; margin-top: 4px; }
+
+/* Interactive SVG Chart Container */
+.chart-card { background: var(--navy-2); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; margin-bottom: 24px; position: relative; }
+.chart-container { width: 100%; height: 260px; min-height: 260px; margin-top: 14px; position: relative; }
+.chart-legend { display: flex; justify-content: center; gap: 18px; font-size: 11px; font-weight: 600; margin-top: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+/* Report Document presentation */
+.statement-doc {
+  background: #fff; color: #111827; border: 1px solid #e5e7eb;
+  border-radius: var(--radius-lg); padding: 48px; min-height: 400px;
+  box-shadow: var(--shadow-lg); display: none;
+}
+.statement-doc.show { display: block; }
+
+.doc-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111827; padding-bottom: 24px; margin-bottom: 28px; }
+.doc-brand { display: flex; align-items: center; gap: 12px; }
+.doc-logo { font-size: 32px; color: #111827; }
+.doc-name { font-family: var(--font-display); font-size: 20px; font-weight: 700; text-transform: uppercase; }
+.doc-title { text-align: right; font-family: var(--font-display); }
+.doc-title h2 { font-size: 18px; color: #111827; font-weight: 700; text-transform: uppercase; }
+.doc-title .range { font-size: 12px; color: #6b7280; margin-top: 4px; }
+
+.doc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; background: #f9fafb; border: 1px solid #f3f4f6; border-radius: var(--radius-md); padding: 18px 24px; }
+.dg-item { }
+.dg-label { font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+.dg-value { font-family: var(--font-display); font-size: 18px; font-weight: 700; color: #111827; margin-top: 2px; }
+
+.doc-table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12.5px; }
+.doc-table th { background: #f3f4f6; color: #4b5563; font-weight: 600; text-transform: uppercase; font-size: 10px; letter-spacing: 0.05em; padding: 10px 14px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+.doc-table td { padding: 10px 14px; border-bottom: 1px dashed #e5e7eb; color: #111827; }
+.doc-table tr:last-child td { border-bottom: none; }
+.doc-table td.mono { font-family: var(--font-mono); font-size: 11px; }
+
+/* ── PRINT EXECUTIVE PDF STYLES ─────────────────────────── */
+@media print {
+  body { background: #fff; color: #000; }
+  .sidebar, .page-topbar, .section-card, .chart-card, .mobile-overlay, #toastContainer { display: none !important; }
+  .main-area { margin-left: 0 !important; width: 100% !important; min-height: auto !important; }
+  .page-body { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+  .statement-doc { display: block !important; border: none !important; box-shadow: none !important; padding: 0 !important; }
+  
+  @page {
+    size: A4 portrait;
+    margin: 15mm 15mm 20mm 15mm;
+  }
+}
+
+/* ── MOBILE OVERLAY ─────────────────────────────────────── */
+.mobile-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 99; }
+.mobile-overlay.show { display: block; }
+
+@media (max-width: 900px) {
+  .report-controls { grid-template-columns: 1fr 1fr; }
+  .metric-report-grid { grid-template-columns: 1fr; }
+  .doc-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 768px) {
+  .sidebar { left: -240px; }
+  .sidebar.open { left: 0; }
+  .main-area { margin-left: 0; }
+  .mobile-menu-btn { display: block; }
+}
+</style>
+</head>
+<body>
+
+<div class="mobile-overlay" id="mobileOverlay"></div>
+
+<!-- toast -->
+<div id="toastContainer" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
+
+<!-- ── APP SHELL ──────────────────────────────────────────── -->
+<div class="app-shell">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="sb-logo" id="sbLogo">⬡</div>
+      <div class="sb-name">
+        <span id="sbBizName">Exchange</span>
+        <small>Management System</small>
+      </div>
+    </div>
+
+    <div class="nav-group-label">Main</div>
+    <a href="dashboard.html" class="nav-item"><span class="nav-icon">📊</span> Dashboard</a>
+    <a href="new-transaction.html" class="nav-item"><span class="nav-icon">➕</span> New Transaction</a>
+    <a href="transactions.html" class="nav-item"><span class="nav-icon">📋</span> All Transactions</a>
+    <a href="clients.html" class="nav-item"><span class="nav-icon">👥</span> Clients KYC</a>
+
+    <div class="nav-group-label">System</div>
+    <a href="chain-integrity.html" class="nav-item"><span class="nav-icon">🔐</span> Chain Integrity</a>
+    <a href="reports.html" class="nav-item active"><span class="nav-icon">📑</span> Reports</a>
+    <a href="settings.html" class="nav-item"><span class="nav-icon">⚙️</span> Settings</a>
+    <a href="audit-log-view.html" class="nav-item"><span class="nav-icon">📁</span> Audit Logs</a>
+
+    <div class="sidebar-footer">
+      <div class="session-pill">⏱ Session: <span id="sessionTimer">—</span></div>
+      <button class="nav-item" id="logoutBtn"><span class="nav-icon">🚪</span> Logout</button>
+    </div>
+  </nav>
+
+  <!-- MAIN AREA -->
+  <div class="main-area">
+
+    <!-- TOPBAR -->
+    <div class="page-topbar">
+      <div class="ptb-left">
+        <button class="mobile-menu-btn" id="mobileMenuBtn">☰</button>
+        <div>
+          <div class="ptb-title">📑 Reports & Statements</div>
+          <div class="ptb-sub" id="ptbSub">Generate visual reports, export audit-safe PDFs</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BODY -->
+    <div class="page-body">
+
+      <!-- Configurations Panel -->
+      <div class="section-card">
+        <div class="section-title">📊 Build Ledger Statement</div>
+        <div class="report-controls">
+          
+          <div class="form-group">
+            <label class="form-label">Report Statement Type</label>
+            <select class="form-input" id="fReportType">
+              <option value="financial">💰 Chronological Financial Summary</option>
+              <option value="buysell">📥 Buy/Sell Volume Analytics</option>
+              <option value="bankVolume">🏛️ Banking Channel Breakdown</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Start Date</label>
+            <input type="date" class="form-input" id="fStartDate">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">End Date</label>
+            <input type="date" class="form-input" id="fEndDate">
+          </div>
+
+          <div style="display:flex; gap:10px;">
+            <button class="btn-primary" onclick="generateReport()">📅 Run Statement</button>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Live metrics and dynamic SVG line chart -->
+      <div id="visualReportSection" style="display:none;">
+        
+        <div class="metric-report-grid">
+          <div class="metric-box">
+            <div class="mb-lbl">Period Volume PKR</div>
+            <div class="mb-val" id="metPkr" style="color:var(--white);">₨ 0</div>
+          </div>
+          <div class="metric-box">
+            <div class="mb-lbl">Average Exchange Rate</div>
+            <div class="mb-val" id="metRate" style="color:var(--blue);">0.00</div>
+          </div>
+          <div class="metric-box">
+            <div class="mb-lbl">Activity Count</div>
+            <div class="mb-val" id="metCount">0 Blocks Chained</div>
+          </div>
+        </div>
+
+        <div class="chart-card">
+          <div class="pane-title">📊 Daily Buy/Sell Volume Trends</div>
+          
+          <!-- Pure SVG line and bar node -->
+          <div class="chart-container" id="svgChartContainer">
+            <!-- Dynamic SVG chart injected here -->
+          </div>
+
+          <div class="chart-legend">
+            <div class="legend-item"><div class="legend-dot" style="background:var(--green);"></div> Buy Volume</div>
+            <div class="legend-item"><div class="legend-dot" style="background:var(--gold);"></div> Sell Volume</div>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:10px; margin-bottom: 24px;">
+          <button class="btn-secondary" onclick="window.print()">🖨️ Export as Executive PDF</button>
+          <button class="btn-secondary" onclick="exportReportAsCsv()">📄 Download Statement CSV</button>
+        </div>
+
+      </div>
+
+      <!-- Executive Printable Statement Document (A4 Grid formatted) -->
+      <div class="statement-doc" id="statementHtmlDoc">
+        
+        <div class="doc-header">
+          <div class="doc-brand">
+            <div class="doc-logo" id="dLogo">⬡</div>
+            <div>
+              <div class="doc-name" id="dBizName">Loading Exchange…</div>
+              <div style="font-size:10px; color:#4b5563; margin-top:2px;" id="dBizContact">Faisal Town, Lahore</div>
+            </div>
+          </div>
+          <div class="doc-title">
+            <h2>Financial Ledger Statement</h2>
+            <div class="range" id="dStatementDateRange">Statement range: All dates</div>
+          </div>
+        </div>
+
+        <div class="doc-grid">
+          <div class="dg-item">
+            <div class="dg-label">Total Volume (PKR)</div>
+            <div class="dg-value" id="dTotalPkr">₨ 0.00</div>
+          </div>
+          <div class="dg-item">
+            <div class="dg-label">USDT Chained Vol</div>
+            <div class="dg-value" id="dTotalUsdt">0.00 USDT</div>
+          </div>
+          <div class="dg-item">
+            <div class="dg-label">Average Exchange Rate</div>
+            <div class="dg-value" id="dAvgRate">0.00</div>
+          </div>
+          <div class="dg-item">
+            <div class="dg-label">Locked Block Counts</div>
+            <div class="dg-value" id="dBlockCounts">0 Blocks</div>
+          </div>
+        </div>
+
+        <h3 style="color:#111827; font-size:13px; font-weight:700; text-transform:uppercase; margin-bottom:12px;">Chained Blocks Included</h3>
+        
+        <table class="doc-table">
+          <thead>
+            <tr>
+              <th>Block</th>
+              <th>Receipt Number</th>
+              <th>Type</th>
+              <th>Client Name & CNIC</th>
+              <th>Pkr Amount</th>
+              <th>Rate</th>
+              <th>Usdt Amount</th>
+            </tr>
+          </thead>
+          <tbody id="statementTableBody">
+            <!-- Table statement elements -->
+          </tbody>
+        </table>
+
+        <!-- Document signature placeholder -->
+        <div style="margin-top:60px; display:flex; justify-content:space-between; font-size:11px; color:#4b5563;">
+          <div>
+            <div>Statement Prepared on: <strong id="docDatePrep">Ex-Time</strong></div>
+            <div style="margin-top:4px;">Signature hash: <span style="font-family:var(--font-mono); font-size:9.5px;" id="docSignHash">NONE</span></div>
+          </div>
+          <div style="text-align:right; border-top:1px solid #d1d5db; width:200px; padding-top:8px; margin-top:16px;">
+            Authorized Exchange Node Officer
+          </div>
+        </div>
+
+      </div><!-- /statement-doc -->
+
+    </div><!-- /body -->
+  </div><!-- /main area -->
+</div><!-- /app shell -->
+
+<script src="db.js"></script>
+<script src="auth.js"></script>
+<script src="profile.js"></script>
+<script src="audit-log.js"></script>
+<script>
+'use strict';
+
+// ── STATE ─────────────────────────────────────────────────
+let _allTxns = [];
+let _filteredStatementData = [];
+
+// ── INIT ──────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  // Guard auth loop
+  if (!Auth.requireAuth()) return;
+
+  await DB.init();
+  await loadProfile();
+
+  // Set default dates placeholder
+  const today = new Date();
+  const prior = new Date();
+  prior.setDate(prior.getDate() - 30);
+
+  document.getElementById('fStartDate').value = prior.toISOString().split('T')[0];
+  document.getElementById('fEndDate').value = today.toISOString().split('T')[0];
+
+  // Retrieve files ledger pool
+  _allTxns = await DB.all('SELECT * FROM transactions ORDER BY chain_index ASC');
+
+  setupSession();
+  setupMobileNav();
+  setupLogout();
+});
+
+// ── SIDEBAR PROFILE ───────────────────────────────────────
+async function loadProfile() {
+  try {
+    const p = await Profile.get();
+    if (p) {
+      document.getElementById('sbLogo').textContent = p.logoEmoji || '⬡';
+      document.getElementById('sbBizName').textContent = p.businessName || 'ExchangeTable';
+      
+      // Bind Statement Document Header
+      document.getElementById('dLogo').textContent = p.logoEmoji || '⬡';
+      document.getElementById('dBizName').textContent = p.businessName || 'Exchange node';
+      document.getElementById('dBizContact').textContent = `${p.area || ''}, ${p.city || ''} | Phone: ${p.phone || '—'} | WA: ${p.whatsapp || '—'}`;
+    }
+  } catch(e) {}
+}
+
+// ── GENERATE REPORT ───────────────────────────────────────
+function generateReport() {
+  const start = document.getElementById('fStartDate').value;
+  const end = document.getElementById('fEndDate').value;
+  const repType = document.getElementById('fReportType').value;
+
+  if (!start || !end) {
+    Toast.show('Please select both start and end statement dates.', 'warning');
+    return;
+  }
+
+  // Filter transaction dataset
+  _filteredStatementData = _allTxns.filter(t => {
+    const tDate = t.timestamp.split('T')[0];
+    return tDate >= start && tDate <= end;
+  });
+
+  if (_filteredStatementData.length === 0) {
+    Toast.show('No blocks are chained within the selected boundary range.', 'warning');
+    // Hide components
+    document.getElementById('visualReportSection').style.display = 'none';
+    document.getElementById('statementHtmlDoc').classList.remove('show');
+    return;
+  }
+
+  document.getElementById('visualReportSection').style.display = 'block';
+  document.getElementById('statementHtmlDoc').classList.add('show');
+
+  // Compute calculated metrics
+  calculateReportMetrics();
+  renderDynamicSvgChart();
+  populateStatementA4Doc();
+
+  AuditLog.add(
+    'REPORT_GENERATED',
+    `Type: ${repType} | Range: ${start} to ${end} | Blocks: ${_filteredStatementData.length}`
+  );
+  Toast.show('📑 Report metrics compiled and visual chart rendered.', 'success');
+}
+
+function calculateReportMetrics() {
+  let volumePkr = 0;
+  let totalRate = 0;
+  let count     = _filteredStatementData.length;
+
+  _filteredStatementData.forEach(t => {
+    volumePkr += parseFloat(t.amount_pkr) || 0;
+    totalRate += parseFloat(t.exchange_rate) || 0;
+  });
+
+  const avgRate = count > 0 ? (totalRate / count) : 0;
+
+  document.getElementById('metPkr').textContent = `₨ ${Math.round(volumePkr).toLocaleString()}`;
+  document.getElementById('metRate').textContent = avgRate.toFixed(3);
+  document.getElementById('metCount').textContent = `${count} Blocks Chained`;
+}
+
+// ── POPULATE TABLE DOCUMENT ──────────────────────────────
+function populateStatementA4Doc() {
+  const start = document.getElementById('fStartDate').value;
+  const end = document.getElementById('fEndDate').value;
+
+  document.getElementById('dStatementDateRange').innerHTML = `Statement Range: <strong>${start}</strong> to <strong>${end}</strong>`;
+
+  let totalPkr  = 0;
+  let totalUsdt = 0;
+  let totalRate = 0;
+  let count     = _filteredStatementData.length;
+
+  const tbody = document.getElementById('statementTableBody');
+
+  tbody.innerHTML = _filteredStatementData.map(t => {
+    totalPkr += parseFloat(t.amount_pkr) || 0;
+    totalUsdt += parseFloat(t.amount_usdt) || 0;
+    totalRate += parseFloat(t.exchange_rate) || 0;
+
+    const isBuy = t.txn_type === 'buy';
+
+    return `
+      <tr>
+        <td class="mono">#${t.chain_index}</td>
+        <td class="mono" style="font-weight:600;">${t.receipt_number}</td>
+        <td style="color:${isBuy ? '#059669' : '#d97706'}">${isBuy ? '📥 Buy' : '📤 Sell'}</td>
+        <td>
+          <div style="font-weight:600;">${esc(t.client_name)}</div>
+          <div style="font-size:10px; color:#6b7280;">${t.client_cnic || 'No CNIC'}</div>
+        </td>
+        <td>₨ ${parseFloat(t.amount_pkr).toLocaleString(undefined, {minimumFractionDigits:2})}</td>
+        <td>${parseFloat(t.exchange_rate).toFixed(3)}</td>
+        <td>${parseFloat(t.amount_usdt).toFixed(2)} USDT</td>
+      </tr>
+    `;
+  }).join('');
+
+  const avgRate = count > 0 ? (totalRate / count) : 0;
+
+  // Bind parameters
+  document.getElementById('dTotalPkr').textContent = `₨ ${totalPkr.toLocaleString(undefined, {minimumFractionDigits:2})}`;
+  document.getElementById('dTotalUsdt').textContent = `${totalUsdt.toFixed(2)} USDT`;
+  document.getElementById('dAvgRate').textContent = avgRate.toFixed(3);
+  document.getElementById('dBlockCounts').textContent = `${count} Blocks`;
+
+  document.getElementById('docDatePrep').textContent = new Date().toLocaleString();
+
+  // Highlight hash of the tip record of this statement
+  const tipRecord = _filteredStatementData[_filteredStatementData.length - 1];
+  document.getElementById('docSignHash').textContent = tipRecord ? tipRecord.hash.toUpperCase() : 'NONE';
+}
+
+// ── RENDER DYNAMIC PURE SVG LINE CHART ───────────────────
+function renderDynamicSvgChart() {
+  const container = document.getElementById('svgChartContainer');
+  const w = container.clientWidth || 600;
+  const h = 260;
+
+  // Group data by daily records
+  const dailyGroups = {};
+  _filteredStatementData.forEach(t => {
+    const day = t.timestamp.split('T')[0];
+    if (!dailyGroups[day]) {
+      dailyGroups[day] = { buy: 0, sell: 0 };
+    }
+    const val = parseFloat(t.amount_usdt) || 0;
+    if (t.txn_type === 'buy') {
+      dailyGroups[day].buy += val;
+    } else {
+      dailyGroups[day].sell += val;
+    }
+  });
+
+  const sortedDays = Object.keys(dailyGroups).sort();
+  
+  if (sortedDays.length === 0) {
+    container.innerHTML = '<div style="color:var(--muted); text-align:center; padding-top:100px;">No trend data matches boundaries.</div>';
+    return;
+  }
+
+  // Draw chart parameters
+  let maxVal = 100; // minimum scale
+  sortedDays.forEach(d => {
+    const v = Math.max(dailyGroups[d].buy, dailyGroups[d].sell);
+    if (v > maxVal) maxVal = v;
+  });
+
+  // margins
+  const mTop = 20, mBot = 40, mLeft = 60, mRight = 30;
+  const graphW = w - mLeft - mRight;
+  const graphH = h - mTop - mBot;
+
+  // Draw coordinate axis lines and ticks
+  let svg = `<svg width="${w}" height="${h}" style="background:transparent; font-family:var(--font-mono); font-size:9px; overflow:visible;">`;
+
+  // Draw grid lines
+  const gridLines = 4;
+  for (let i = 0; i <= gridLines; i++) {
+    const gy = mTop + (graphH * i / gridLines);
+    const tickVal = Math.round(maxVal - (maxVal * i / gridLines));
+    svg += `
+      <line x1="${mLeft}" y1="${gy}" x2="${w - mRight}" y2="${gy}" stroke="var(--border-soft)" stroke-dasharray="4,4"/>
+      <text x="${mLeft - 10}" y="${gy + 3}" fill="var(--muted)" text-anchor="end">${tickVal} U</text>
+    `;
+  }
+
+  // Map coordinate coordinates of line chart
+  const buyCoords = [];
+  const sellCoords = [];
+  const totalDays = sortedDays.length;
+
+  sortedDays.forEach((day, index) => {
+    const gx = mLeft + (totalDays === 1 ? graphW / 2 : (graphW * index / (totalDays - 1)));
+    
+    // heights
+    const buyY  = mTop + graphH - (dailyGroups[day].buy / maxVal) * graphH;
+    const sellY = mTop + graphH - (dailyGroups[day].sell / maxVal) * graphH;
+
+    buyCoords.push(`${gx},${buyY}`);
+    sellCoords.push(`${gx},${sellY}`);
+
+    // Show date tick in intervals
+    if (totalDays < 8 || index === 0 || index === totalDays - 1 || index === Math.round(totalDays / 2)) {
+      const displayDate = day.substring(5); // MM-DD
+      svg += `<text x="${gx}" y="${h - 15}" fill="var(--muted)" text-anchor="middle">${displayDate}</text>`;
+    }
+  });
+
+  // Render polyline paths
+  if (totalDays > 1) {
+    svg += `
+      <polyline points="${buyCoords.join(' ')}" fill="none" stroke="var(--green)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <polyline points="${sellCoords.join(' ')}" fill="none" stroke="var(--gold)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    `;
+  }
+
+  // Draw point circles
+  sortedDays.forEach((day, index) => {
+    const gx = mLeft + (totalDays === 1 ? graphW / 2 : (graphW * index / (totalDays - 1)));
+    const buyY  = mTop + graphH - (dailyGroups[day].buy / maxVal) * graphH;
+    const sellY = mTop + graphH - (dailyGroups[day].sell / maxVal) * graphH;
+
+    if (dailyGroups[day].buy > 0) {
+      svg += `<circle cx="${gx}" cy="${buyY}" r="4" fill="var(--green)" stroke="var(--navy-2)" stroke-width="1.5"/>`;
+    }
+    if (dailyGroups[day].sell > 0) {
+      svg += `<circle cx="${gx}" cy="${sellY}" r="4" fill="var(--gold)" stroke="var(--navy-2)" stroke-width="1.5"/>`;
+    }
+  });
+
+  svg += `</svg>`;
+  container.innerHTML = svg;
+}
+
+// ── EXPORT REPORT AS CSV ──
+function exportReportAsCsv() {
+  if (_filteredStatementData.length === 0) return;
+
+  const headers = ['Chain Index', 'Receipt Number', 'Type', 'Timestamp', 'Amount PKR', 'Rate', 'Amount USDT', 'Client Name', 'Client CNIC'];
+  const csvRows = [headers.join(',')];
+
+  _filteredStatementData.forEach(t => {
+    const row = [
+      t.chain_index,
+      `"${t.receipt_number}"`,
+      `"${t.txn_type.toUpperCase()}"`,
+      `"${t.timestamp}"`,
+      t.amount_pkr,
+      t.exchange_rate,
+      t.amount_usdt,
+      `"${t.client_name.replace(/"/g, '""')}"`,
+      `"${t.client_cnic || ''}"`
+    ];
+    csvRows.push(row.join(','));
+  });
+
+  const blob = new Blob([csvRows.join('\n')], {type: 'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Statement-Export-${document.getElementById('fStartDate').value}-to-${document.getElementById('fEndDate').value}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+  Toast.show('📥 Statement CSV download finished.', 'success');
+}
+
+// ── UTILITIES ─────────────────────────────────────────────
+function setTxt(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function setupSession() {
+  function tick() {
+    try {
+      const raw = localStorage.getItem('dems_session');
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      const left = Math.max(0, Math.floor((s.expiresAt - Date.now()) / 1000));
+      const m = Math.floor(left / 60), sec = left % 60;
+      setTxt('sessionTimer', m + ':' + String(sec).padStart(2 ,'0'));
+    } catch(e) {}
+  }
+  tick(); setInterval(tick, 1000);
+}
+
+function setupLogout() {
+  document.getElementById('logoutBtn').addEventListener('click', () => { Auth.logout(); });
+}
+
+function setupMobileNav() {
+  const btn = document.getElementById('mobileMenuBtn');
+  const sb  = document.getElementById('sidebar');
+  const ov  = document.getElementById('mobileOverlay');
+  if (!btn) return;
+  btn.addEventListener('click', () => { sb.classList.toggle('open'); ov.classList.toggle('show'); });
+  ov.addEventListener('click', () => { sb.classList.remove('open'); ov.classList.remove('show'); });
+}
+
+const Toast = {
+  show(msg, type='info', dur=3500) {
+    const c = document.getElementById('toastContainer');
+    const t = document.createElement('div');
+    const icons = { success:'✅', error:'❌', info:'ℹ️', warning:'⚠️' };
+    t.className = `toast ${type}`;
+    t.innerHTML = `<span>${icons[type]||'ℹ️'}</span><span>${msg}</span>`;
+    c.appendChild(t);
+    setTimeout(() => { t.style.opacity='0'; t.style.transition='opacity 0.3s'; setTimeout(()=>t.remove(),300); }, dur);
+  }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>New Transaction — DEMS</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+/* ── LAYOUT ─────────────────────────────────────────────── */
+.app-shell { display: flex; min-height: 100vh; }
+
+.sidebar {
+  width: 220px; flex-shrink: 0;
+  background: var(--navy-2);
+  border-right: 1px solid var(--border);
+  padding: 24px 12px;
+  position: fixed; top: 0; left: 0; height: 100vh;
+  overflow-y: auto; z-index: 100;
+  display: flex; flex-direction: column;
+  transition: left 0.25s;
+}
+.sidebar-brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 8px 20px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
+}
+.sb-logo { font-size: 22px; color: var(--blue); }
+.sb-name { font-family: var(--font-display); font-size: 15px; font-weight: 700; color: var(--white); line-height: 1.1; }
+.sb-name small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+.nav-group-label {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  padding: 0 8px; margin: 16px 0 6px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 9px 10px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 500; color: var(--muted);
+  text-decoration: none; transition: all 0.15s; margin-bottom: 2px;
+  background: none; border: none; cursor: pointer; width: 100%; text-align: left;
+}
+.nav-item:hover { background: var(--blue-glow); color: var(--white); text-decoration: none; }
+.nav-item.active { background: var(--blue-glow); color: var(--blue); border: 1px solid rgba(14,165,233,0.2); }
+.nav-icon { font-size: 15px; width: 18px; text-align: center; flex-shrink: 0; }
+.sidebar-footer { margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); }
+.session-pill { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); padding: 6px 10px; margin-bottom: 4px; }
+.session-pill span { color: var(--gold); font-family: var(--font-mono); }
+
+.main-area { margin-left: 220px; flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
+
+/* ── PAGE TOPBAR ────────────────────────────────────────── */
+.page-topbar {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(8,15,28,0.92); backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 32px; height: 60px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.ptb-left { display: flex; align-items: center; gap: 14px; }
+.ptb-title { font-family: var(--font-display); font-size: 17px; font-weight: 700; color: var(--white); }
+.ptb-sub { font-size: 12px; color: var(--muted); }
+.mobile-menu-btn { display: none; background: none; border: none; color: var(--white); font-size: 20px; cursor: pointer; padding: 4px 8px; }
+
+/* ── FORM CONTAINER ─────────────────────────────────────── */
+.page-body { padding: 32px; max-width: 1100px; width: 100%; margin: 0 auto; }
+.form-shell { display: grid; grid-template-columns: 1fr 340px; gap: 24px; }
+
+.section-card {
+  background: var(--navy-2); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 24px 28px; margin-bottom: 24px;
+}
+.section-title {
+  font-family: var(--font-display); font-size: 14px; font-weight: 700; color: var(--blue);
+  text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 20px;
+  padding-bottom: 8px; border-bottom: 1px solid var(--border-soft);
+  display: flex; align-items: center; gap: 8px;
+}
+
+.triple-grid { display: grid; grid-template-columns: 1.2fr 1fr 1.2fr; gap: 16px; }
+.double-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.form-group { margin-bottom: 16px; }
+.form-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; display: block; }
+.form-label .req { color: var(--red); margin-left: 2px; }
+.form-label .subtitle { text-transform: none; font-weight: 400; letter-spacing: 0; font-style: italic; }
+
+/* ── TXN TYPE SELECTOR ──────────────────────────────────── */
+.type-selector { display: flex; gap: 10px; margin-bottom: 24px; }
+.type-btn {
+  flex: 1; padding: 16px; border-radius: var(--radius-md);
+  font-family: var(--font-display); font-size: 14px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer;
+  border: 1px solid var(--border); background: var(--navy-2); color: var(--muted);
+  transition: all 0.15s ease-in-out; text-align: center;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.type-btn:hover { border-color: var(--blue); color: var(--white); }
+.type-btn.active.buy  { background: rgba(16,185,129,0.1); border-color: var(--green); color: var(--green); }
+.type-btn.active.sell { background: rgba(245,158,11,0.08); border-color: var(--gold); color: var(--gold); }
+
+/* ── EXCHANGE RATE ENGINE ───────────────────────────────── */
+.calculator-box {
+  background: var(--navy-3); border: 1.5px dashed var(--border);
+  border-radius: var(--radius-md); padding: 18px; margin-bottom: 16px;
+}
+.calc-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.calc-title { font-family: var(--font-display); font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+.calc-badge { font-size: 9.5px; font-weight: 600; background: rgba(14,165,233,0.12); color: var(--blue); padding: 2px 8px; border-radius: var(--radius-pill); }
+
+/* ── DYNAMIC LOOKUP SUGGESTIONS ─────────────────────────── */
+.lookup-wrapper { position: relative; }
+.lookup-results {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--navy-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); max-height: 200px; overflow-y: auto;
+  z-index: 150; box-shadow: var(--shadow-lg); display: none;
+}
+.lookup-results.show { display: block; }
+.lookup-item {
+  padding: 10px 14px; cursor: pointer; border-bottom: 1px solid var(--border-soft);
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.lookup-item:last-child { border-bottom: none; }
+.lookup-item:hover { background: var(--navy-3); }
+.lookup-name { font-weight: 600; font-size: 13px; }
+.lookup-cnic { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+.lookup-badge { font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: var(--radius-pill); }
+
+/* ── COMPLIANCE ALERTS ──────────────────────────────────── */
+.compliance-banner {
+  background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.3);
+  border-radius: var(--radius-md); padding: 14px 18px; margin-top: 10px; margin-bottom: 16px;
+  display: none; align-items: flex-start; gap: 12px;
+  animation: shake 0.35s ease-in-out;
+}
+.compliance-banner.show { display: flex; }
+@keyframes shake {
+  0%,100%{transform:translateX(0)}
+  20%,60%{transform:translateX(-4px)}
+  40%,80%{transform:translateX(4px)}
+}
+.cb-icon { font-size: 20px; line-height: 1; flex-shrink: 0; margin-top: 2px; }
+.cb-title { font-family: var(--font-display); font-size: 13px; font-weight: 700; color: #fca5a5; }
+.cb-reason { font-size: 12px; color: #fca5a5; opacity: 0.85; margin-top: 3px; line-height: 1.5; }
+
+/* ── SCREENSHOT UPLOADER ────────────────────────────────── */
+.upload-zone {
+  border: 1.5px dashed var(--border); border-radius: var(--radius-md);
+  padding: 24px; text-align: center; cursor: pointer;
+  background: var(--navy-3); transition: all 0.15s ease;
+  position: relative; overflow: hidden;
+  margin-bottom: 12px;
+}
+.upload-zone:hover { border-color: var(--blue); background: var(--blue-glow); }
+.upload-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.7; }
+.upload-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+.upload-subtitle { font-size: 11px; color: var(--muted); }
+.upload-file-input { opacity: 0; position: absolute; inset: 0; cursor: pointer; }
+
+/* Image preview thumbnails */
+.preview-shell {
+  display: flex; align-items: center; gap: 14px;
+  background: var(--navy-3); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: 10px 14px;
+}
+.preview-thumb { width: 44px; height: 44px; border-radius: var(--radius-xs); object-fit: cover; border: 1px solid var(--border); }
+.preview-meta { flex: 1; min-width: 0; }
+.preview-name { font-size: 11.5px; font-weight: 600; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+.preview-size { font-size: 10px; color: var(--muted); margin-top: 1px; font-family: var(--font-mono); }
+.preview-remove { background: none; border: none; color: var(--red); cursor: pointer; font-size: 14px; padding: 4px 8px; }
+.preview-remove:hover { color: #fca5a5; }
+
+/* ── LOCK CONFIRM BOARD ─────────────────────────────────── */
+.help-card {
+  background: var(--navy-2); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); padding: 20px 24px;
+}
+.help-title { font-family: var(--font-display); font-size: 13.5px; font-weight: 700; color: var(--white); margin-bottom: 12px; }
+.help-list { font-size: 12px; color: var(--muted); list-style: none; }
+.help-list li { margin-bottom: 10px; display: flex; gap: 8px; line-height: 1.5; }
+.help-list li::before { content: '•'; color: var(--blue); font-weight: bold; }
+.help-list strong { color: var(--white); }
+
+.lock-alert {
+  background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.2);
+  border-radius: var(--radius-md); padding: 14px 16px; margin: 20px 0;
+  display: flex; gap: 10px; align-items: flex-start;
+}
+.la-icon { font-size: 16px; line-height: 1; margin-top: 2px; }
+.la-text { font-size: 11.5px; color: #ffedd5; line-height: 1.5; }
+
+/* Fields validated error */
+.field-error-text { font-size: 11px; color: var(--red); margin-top: 4px; display: none; }
+.field-error-text.show { display: block; }
+
+/* ── MOBILE OVERLAY ─────────────────────────────────────── */
+.mobile-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 99; }
+.mobile-overlay.show { display: block; }
+
+@media (max-width: 860px) {
+  .form-shell { grid-template-columns: 1fr; }
+  .page-body { padding: 16px; }
+}
+@media (max-width: 768px) {
+  .sidebar { left: -240px; }
+  .sidebar.open { left: 0; }
+  .main-area { margin-left: 0; }
+  .mobile-menu-btn { display: block; }
+  .triple-grid { grid-template-columns: 1fr; gap: 0; }
+}
+</style>
+</head>
+<body>
+
+<div class="mobile-overlay" id="mobileOverlay"></div>
+
+<!-- toast -->
+<div id="toastContainer" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
+
+<!-- ── APP SHELL ──────────────────────────────────────────── -->
+<div class="app-shell">
+
+  <!-- SIDEBAR -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="sb-logo" id="sbLogo">⬡</div>
+      <div class="sb-name">
+        <span id="sbBizName">Exchange</span>
+        <small>Management System</small>
+      </div>
+    </div>
+
+    <div class="nav-group-label">Main</div>
+    <a href="dashboard.html" class="nav-item"><span class="nav-icon">📊</span> Dashboard</a>
+    <a href="new-transaction.html" class="nav-item active"><span class="nav-icon">➕</span> New Transaction</a>
+    <a href="transactions.html" class="nav-item"><span class="nav-icon">📋</span> All Transactions</a>
+    <a href="clients.html" class="nav-item"><span class="nav-icon">👥</span> Clients KYC</a>
+
+    <div class="nav-group-label">System</div>
+    <a href="chain-integrity.html" class="nav-item"><span class="nav-icon">🔐</span> Chain Integrity</a>
+    <a href="reports.html" class="nav-item"><span class="nav-icon">📑</span> Reports</a>
+    <a href="settings.html" class="nav-item"><span class="nav-icon">⚙️</span> Settings</a>
+    <a href="audit-log-view.html" class="nav-item"><span class="nav-icon">📁</span> Audit Logs</a>
+
+    <div class="sidebar-footer">
+      <div class="session-pill">⏱ Session: <span id="sessionTimer">—</span></div>
+      <button class="nav-item" id="logoutBtn"><span class="nav-icon">🚪</span> Logout</button>
+    </div>
+  </nav>
+
+  <!-- MAIN AREA -->
+  <div class="main-area">
+
+    <!-- TOPBAR -->
+    <div class="page-topbar">
+      <div class="ptb-left">
+        <button class="mobile-menu-btn" id="mobileMenuBtn">☰</button>
+        <div>
+          <div class="ptb-title">➕ New Transaction</div>
+          <div class="ptb-sub" id="ptbSub">Enter exchange, auto-chain block</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BODY -->
+    <div class="page-body">
+      <form id="txnForm" autocomplete="off" onsubmit="return false;">
+
+        <div class="form-shell">
+
+          <!-- Left Main Pane -->
+          <div>
+
+            <!-- Type Selector -->
+            <div class="type-selector">
+              <div class="type-btn buy active" id="btnTypeBuy" onclick="setTxnType('buy')">📥 Buy (Client Sells USDT)</div>
+              <div class="type-btn sell" id="btnTypeSell" onclick="setTxnType('sell')">📤 Sell (Client Buys USDT)</div>
+            </div>
+
+            <!-- 1. Exchange rates & calculations -->
+            <div class="section-card">
+              <div class="section-title">💵 Volume & Rates</div>
+
+              <div class="calculator-box">
+                <div class="calc-header">
+                  <div class="calc-title">Interactive money-exchanger</div>
+                  <div class="calc-badge" id="calcModeIndicator">Dual-Sync active</div>
+                </div>
+
+                <div class="triple-grid">
+                  <div class="form-group">
+                    <label class="form-label">PKR Volume <span class="req">*</span></label>
+                    <input type="number" step="any" min="0" class="form-input mono" id="fAmountPkr" placeholder="Total PKR" required>
+                    <div class="field-error-text" id="errPkr">Volume must be positive.</div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Exchange Rate <span class="req">*</span></label>
+                    <input type="number" step="any" min="0" class="form-input mono" id="fExchangeRate" placeholder="PKR/USDT Rate" required>
+                    <div class="field-error-text" id="errRate">Rate must be positive.</div>
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">USDT Volume <span class="subtitle">(autosync)</span></label>
+                    <input type="number" step="any" min="0" class="form-input mono" id="fAmountUsdt" placeholder="Total USDT">
+                  </div>
+                </div>
+              </div>
+
+              <!-- order_id / hash metadata -->
+              <div class="double-grid">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label">Bitget Order ID <span class="subtitle">(optional)</span></label>
+                  <input type="text" class="form-input" id="fOrderId" placeholder="e.g. 1024354294025">
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label">Payment Ref / Bank ID <span class="subtitle">(optional)</span></label>
+                  <input type="text" class="form-input" id="fPaymentRef" placeholder="e.g. M-84293845239">
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. Client Identity -->
+            <div class="section-card">
+              <div class="section-title">👤 Client Identity (KYC/AML)</div>
+
+              <!-- Compliance alert box -->
+              <div class="compliance-banner" id="complianceBanner">
+                <div class="cb-icon">🚨</div>
+                <div>
+                  <div class="cb-title">Compliance Alert — Flagged Client</div>
+                  <div class="cb-reason" id="complianceReason">—</div>
+                </div>
+              </div>
+
+              <div class="double-grid">
+                <div class="form-group lookup-wrapper">
+                  <label class="form-label">Client Full Name <span class="req">*</span></label>
+                  <input type="text" class="form-input" id="fClientName" placeholder="Muhammad Ali" required>
+                  <div class="field-error-text" id="errName">Full Name is required.</div>
+                  <!-- lookup box name -->
+                  <div class="lookup-results" id="nameLookupResults"></div>
+                </div>
+                <div class="form-group lookup-wrapper">
+                  <label class="form-label">Client CNIC <span class="subtitle">(required for high-val)</span></label>
+                  <input type="text" class="form-input" id="fClientCnic" placeholder="35201-1234567-1" maxlength="15">
+                  <div class="field-error-text" id="errCnic">Format must match: XXXXX-XXXXXXX-X</div>
+                  <!-- lookup box CNIC -->
+                  <div class="lookup-results" id="cnicLookupResults"></div>
+                </div>
+              </div>
+
+              <div class="double-grid">
+                <div class="form-group">
+                  <label class="form-label">Bank Name <span class="subtitle">(optional)</span></label>
+                  <select class="form-input" id="fBankName">
+                    <option value="">— Select Bank —</option>
+                    <option>HBL</option><option>UBL</option><option>MCB</option>
+                    <option>Allied Bank</option><option>Bank Alfalah</option>
+                    <option>Meezan Bank</option><option>Standard Chartered</option>
+                    <option>Faysal Bank</option><option>Silk Bank</option>
+                    <option>JS Bank</option><option>Askari Bank</option>
+                    <option>Bank of Punjab</option><option>Habib Metro</option>
+                    <option>EasyPaisa</option><option>JazzCash</option>
+                    <option>Nayapay</option><option>SadaPay</option>
+                    <option>Other</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Bank Account Last 4 <span class="subtitle">(optional)</span></label>
+                  <input type="text" class="form-input mono" id="fBankLast4" placeholder="4242" maxlength="4">
+                </div>
+              </div>
+            </div>
+
+            <!-- 3. Attachments & Notes -->
+            <div class="section-card" style="margin-bottom:0;">
+              <div class="section-title">📁 Receipts & Notes</div>
+
+              <div class="form-group">
+                <label class="form-label">Receipt Screenshot <span class="subtitle">(auto-sizes to 1200px to avoid memory overflow)</span></label>
+                
+                <!-- Zone -->
+                <div class="upload-zone" id="uploadZone">
+                  <div class="upload-icon">📷</div>
+                  <div class="upload-title">Drag & drop receipt or click to upload</div>
+                  <div class="upload-subtitle">Resizes automatically to preserve browser storage</div>
+                  <input type="file" class="upload-file-input" id="screenshotFileInput" accept="image/*">
+                </div>
+
+                <!-- Preview list -->
+                <div class="preview-shell" id="previewShell" style="display:none;">
+                  <img src="" class="preview-thumb" id="previewImg" alt="Thumb">
+                  <div class="preview-meta">
+                    <div class="preview-name" id="previewName">receipt.png</div>
+                    <div class="preview-size" id="previewSize">Calculating…</div>
+                  </div>
+                  <button type="button" class="preview-remove" onclick="removeUploadedScreenshot()">✕ Remove</button>
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-bottom:0;">
+                <label class="form-label">Audit Notes <span class="subtitle">(optional)</span></label>
+                <textarea rows="3" class="form-input" id="fNotes" placeholder="Payment details, cash handoff notes, or matching transaction info…"></textarea>
+              </div>
+            </div>
+
+          </div><!-- /Main pane -->
+
+          <!-- Right Sidebar pane -->
+          <div>
+            <div class="section-card help-card">
+              <div class="help-title">🔒 Immutability Notice</div>
+              <ul class="help-list">
+                <li>Once locked, <strong>transactions are final</strong> in the cryptographic chain.</li>
+                <li>The current block is hashed with the <strong>parent hash</strong> to guarantee integrity.</li>
+                <li><strong>No delete or update operations</strong> can be processed under any circumstances.</li>
+                <li>Any modification of past records will <strong>break the integrity chain</strong> immediately.</li>
+              </ul>
+
+              <div class="lock-alert">
+                <div class="la-icon">🚨</div>
+                <div class="la-text"><strong>Review fields carefully.</strong> Once saved, this record is locked. You cannot modify it later.</div>
+              </div>
+
+              <!-- Locked button -->
+              <button class="btn-primary" style="width:100%; padding:14px; font-size:14px;" id="btnLockTransaction">
+                 💾 Lock Block & Generate Receipt
+              </button>
+            </div>
+          </div><!-- /sidebar pane -->
+
+        </div><!-- /form shell -->
+      </form>
+    </div><!-- /body -->
+  </div><!-- /main area -->
+</div><!-- /app shell -->
+
+<!-- Javascript layers -->
+<script src="db.js"></script>
+<script src="auth.js"></script>
+<script src="profile.js"></script>
+<script src="audit-log.js"></script>
+<script src="hash-engine.js"></script>
+<script>
+'use strict';
+
+// ── STATE ─────────────────────────────────────────────────
+let _txnType = 'buy';
+let _uploadedScreenshotBase64 = '';
+let _loadedClients = [];
+let _calculatorFocused = 'pkr'; // track last edited to compute other field
+
+// ── INIT ──────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  // CRITICAL Security Guard step
+  if (!Auth.requireAuth()) return;
+
+  await DB.init();
+  await loadProfile();
+  await loadClientDirectory();
+
+  setupSession();
+  setupMobileNav();
+  setupLogout();
+  setupCalculator();
+  setupClientAutocompleter();
+  setupScreenshotUploader();
+
+  document.getElementById('btnLockTransaction').addEventListener('click', saveAndLockTransaction);
+});
+
+// ── SIDEBAR PROFILE ───────────────────────────────────────
+async function loadProfile() {
+  try {
+    const p = await Profile.get();
+    if (p) {
+      document.getElementById('sbLogo').textContent = p.logoEmoji || '⬡';
+      document.getElementById('sbBizName').textContent = p.businessName || 'ExchangeTable';
+    }
+  } catch(e) {}
+}
+
+async function loadClientDirectory() {
+  try {
+    _loadedClients = await DB.all('SELECT * FROM clients');
+  } catch(e) {}
+}
+
+// ── TRANSACTION TYPE ─────────────────────────────────────
+function setTxnType(t) {
+  _txnType = t;
+  document.getElementById('btnTypeBuy').classList.toggle('active', t === 'buy');
+  document.getElementById('btnTypeSell').classList.toggle('active', t === 'sell');
+  Toast.show(`Switched to: ${t === 'buy' ? '📥 Buy (Client Sells USDT)' : '📤 Sell (Client Buys USDT)'}`, 'info');
+}
+
+// ── TRIPLE EXCHANGER CALCULATOR ───────────────────────────
+function setupCalculator() {
+  const pkrIn  = document.getElementById('fAmountPkr');
+  const rateIn = document.getElementById('fExchangeRate');
+  const usdtIn = document.getElementById('fAmountUsdt');
+
+  // Multi-direction synchronization
+  pkrIn.addEventListener('input', () => { _calculatorFocused = 'pkr'; runCalculation(); });
+  rateIn.addEventListener('input', () => { runCalculation(); });
+  usdtIn.addEventListener('input', () => { _calculatorFocused = 'usdt'; runCalculation(); });
+}
+
+function runCalculation() {
+  const pkrIn  = document.getElementById('fAmountPkr');
+  const rateIn = document.getElementById('fExchangeRate');
+  const usdtIn = document.getElementById('fAmountUsdt');
+
+  const pkr  = parseFloat(pkrIn.value) || 0;
+  const rate = parseFloat(rateIn.value) || 0;
+  const usdt = parseFloat(usdtIn.value) || 0;
+
+  if (rate > 0) {
+    if (_calculatorFocused === 'pkr') {
+      // Calculate USDT
+      usdtIn.value = (pkr / rate).toFixed(2);
+    } else if (_calculatorFocused === 'usdt') {
+      // Calculate PKR
+      pkrIn.value = (usdt * rate).toFixed(2);
+    }
+  } else if (pkr > 0 && usdt > 0) {
+    // If rate is empty or edited, calculate rate based on PKR & USDT
+    rateIn.value = (pkr / usdt).toFixed(4);
+  }
+}
+
+// ── REAL-TIME CLIENT KYC & COMPLIANCE WARNING ────────────
+function setupClientAutocompleter() {
+  const nameIn = document.getElementById('fClientName');
+  const cnicIn = document.getElementById('fClientCnic');
+
+  nameIn.addEventListener('input', () => {
+    checkComplianceStatusAndLookup(nameIn.value, 'name');
+  });
+
+  cnicIn.addEventListener('input', function() {
+    this.value = formatCnic(this.value);
+    checkComplianceStatusAndLookup(this.value, 'cnic');
+  });
+
+  // Hide suggestions on outside click
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.lookup-wrapper')) {
+      document.getElementById('nameLookupResults').classList.remove('show');
+      document.getElementById('cnicLookupResults').classList.remove('show');
+    }
+  });
+}
+
+function formatCnic(v) {
+  v = v.replace(/\D/g, '');
+  if (v.length > 13) v = v.slice(0, 13);
+  if (v.length > 12) {
+    v = v.slice(0, 5) + '-' + v.slice(5, 12) + '-' + v.slice(12);
+  } else if (v.length > 5) {
+    v = v.slice(0, 5) + '-' + v.slice(5);
+  }
+  return v;
+}
+
+function checkComplianceStatusAndLookup(v, type) {
+  const q = v.toLowerCase().trim();
+  const banner = document.getElementById('complianceBanner');
+  const reasonTxt = document.getElementById('complianceReason');
+  const resultsDiv = document.getElementById(type === 'name' ? 'nameLookupResults' : 'cnicLookupResults');
+
+  if (!q) {
+    banner.classList.remove('show');
+    resultsDiv.classList.remove('show');
+    return;
+  }
+
+  // 1. Check Compliance Flag alerts in real-time
+  const matchedFlagged = _loadedClients.find(c => {
+    if (type === 'cnic') {
+      return c.cnic && c.cnic.replace(/\D/g,'') === q.replace(/\D/g,'') && c.is_flagged;
+    } else {
+      return c.full_name && c.full_name.toLowerCase().includes(q) && c.is_flagged;
+    }
+  });
+
+  if (matchedFlagged) {
+    banner.classList.add('show');
+    reasonTxt.textContent = `Client "${matchedFlagged.full_name}" is marked as SUSPICIOUS. Flag Reason: ${matchedFlagged.flag_reason || 'No details provided.'}`;
+  } else {
+    banner.classList.remove('show');
+  }
+
+  // 2. Perform Lookup Auto-complete
+  const matches = _loadedClients.filter(c => {
+    if (type === 'cnic') {
+      return c.cnic && c.cnic.includes(q);
+    } else {
+      return c.full_name && c.full_name.toLowerCase().includes(q);
+    }
+  }).slice(0, 5);
+
+  if (matches.length) {
+    resultsDiv.innerHTML = matches.map(c => {
+      const bColor = c.is_flagged ? 'rgba(239, 68, 68, 0.12)' : c.is_verified ? 'rgba(16, 185, 129, 0.12)' : 'var(--navy-3)';
+      const bText = c.is_flagged ? '🚩 FLAGGED' : c.is_verified ? '✅ VERIFIED' : '⚪ KYC OK';
+      const bTxtColor = c.is_flagged ? '#fca5a5' : c.is_verified ? 'var(--green)' : 'var(--muted)';
+
+      return `
+        <div class="lookup-item" onclick="autocompleteClient(${c.id})">
+          <div>
+            <div class="lookup-name">${escHtml(c.full_name)}</div>
+            <div class="lookup-cnic">${escHtml(c.cnic || 'No CNIC')}</div>
+          </div>
+          <span class="lookup-badge" style="background:${bColor}; color:${bTxtColor};">${bText}</span>
+        </div>
+      `;
+    }).join('');
+    resultsDiv.classList.add('show');
+  } else {
+    resultsDiv.classList.remove('show');
+  }
+}
+
+function autocompleteClient(clientId) {
+  const c = _loadedClients.find(x => x.id === clientId);
+  if (!c) return;
+
+  document.getElementById('fClientName').value = c.full_name;
+  if (c.cnic) document.getElementById('fClientCnic').value = c.cnic;
+  if (c.bank_name) document.getElementById('fBankName').value = c.bank_name;
+  if (c.bank_last4) document.getElementById('fBankLast4').value = c.bank_last4;
+
+  document.getElementById('nameLookupResults').classList.remove('show');
+  document.getElementById('cnicLookupResults').classList.remove('show');
+
+  Toast.show(`👥 KYC Autochained: ${c.full_name} loaded.`, 'success');
+
+  // Verify compliance warning again on loaded client
+  const banner = document.getElementById('complianceBanner');
+  if (c.is_flagged) {
+    banner.classList.add('show');
+    document.getElementById('complianceReason').textContent = `Client "${c.full_name}" is marked as SUSPICIOUS. Flag Reason: ${c.flag_reason || 'No details provided.'}`;
+  } else {
+    banner.classList.remove('show');
+  }
+}
+
+// ── SCREENSHOT UPLOADER WITH IMAGE CANVAS RESIZING ─────────
+function setupScreenshotUploader() {
+  const zone = document.getElementById('uploadZone');
+  const input = document.getElementById('screenshotFileInput');
+
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.style.borderColor = 'var(--blue)'; });
+  zone.addEventListener('dragleave', () => { zone.style.borderColor = 'var(--border)'; });
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.style.borderColor = 'var(--border)';
+    const files = e.dataTransfer.files;
+    if (files.length) handleImageFile(files[0]);
+  });
+
+  input.addEventListener('change', () => {
+    if (input.files.length) handleImageFile(input.files[0]);
+  });
+}
+
+function handleImageFile(file) {
+  if (!file.type.match('image.*')) {
+    Toast.show('Only image attachments are allowed for receipts.', 'error');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const rawUrl = e.target.result;
+
+    // Critical memory guard requirement: Resize image to max-width 1200px before base64 SQLite storage
+    const img = new Image();
+    img.onload = function() {
+      const maxW = 1200;
+      let w = img.width, h = img.height;
+      
+      if (w > maxW) {
+        h = Math.round(h * (maxW / w));
+        w = maxW;
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+
+      // Convert back to compressed JPEG to optimize sqlite/localStorage sizes
+      const compressed64 = canvas.toDataURL('image/jpeg', 0.82);
+      _uploadedScreenshotBase64 = compressed64;
+
+      // Display preview state
+      document.getElementById('uploadZone').style.display = 'none';
+      document.getElementById('previewShell').style.display = 'flex';
+      document.getElementById('previewImg').src = compressed64;
+      document.getElementById('previewName').textContent = file.name;
+
+      // Determine size
+      const kb = Math.round((compressed64.length * 3 / 4) / 1024);
+      document.getElementById('previewSize').textContent = `${kb} KB (optimized max-width 1200px)`;
+
+      AuditLog.add('ATTACHMENT_RESIZED', `File: ${file.name} | Resized to: ${w}x${h} | Size: ${kb}KB`);
+      Toast.show('📷 Screenshot attached and auto-optimized.', 'success');
+    };
+    img.src = rawUrl;
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeUploadedScreenshot() {
+  _uploadedScreenshotBase64 = '';
+  document.getElementById('uploadZone').style.display = 'block';
+  document.getElementById('previewShell').style.display = 'none';
+  document.getElementById('screenshotFileInput').value = '';
+  Toast.show('📷 Attachment removed.', 'info');
+}
+
+// ── SAVE AND LOCK TRANSACTION ──
+async function saveAndLockTransaction() {
+  // Validate fields
+  let valid = true;
+
+  const pkrIn  = document.getElementById('fAmountPkr');
+  const rateIn = document.getElementById('fExchangeRate');
+  const usdtIn = document.getElementById('fAmountUsdt');
+  const nameIn = document.getElementById('fClientName');
+  const cnicIn = document.getElementById('fClientCnic');
+
+  const pkr  = parseFloat(pkrIn.value);
+  const rate = parseFloat(rateIn.value);
+  const usdt = parseFloat(usdtIn.value);
+  const name = nameIn.value.trim();
+  const cnic = cnicIn.value.trim();
+
+  // Reset errors
+  ['errPkr','errRate','errName','errCnic'].forEach(id => document.getElementById(id).classList.remove('show'));
+
+  if (!pkr || pkr <= 0) { document.getElementById('errPkr').classList.add('show'); valid = false; }
+  if (!rate || rate <= 0) { document.getElementById('errRate').classList.add('show'); valid = false; }
+  if (!name) { document.getElementById('errName').classList.add('show'); valid = false; }
+  
+  if (cnic && !/^\d{5}-\d{7}-\d$/.test(cnic)) {
+    document.getElementById('errCnic').classList.add('show'); valid = false;
+  }
+
+  if (!valid) {
+    Toast.show('Please resolve the errors highlighted in red.', 'error');
+    return;
+  }
+
+  const userConfirm = confirm('🚨 CRITICAL ACTION REQUIRED 🚨\n\nOnce locked, transactions are signed cryptographically and can NEVER block modified or deleted!\n\nDo you want to write and lock this transaction block?');
+  if (!userConfirm) return;
+
+  const lockBtn = document.getElementById('btnLockTransaction');
+  lockBtn.disabled = true;
+  lockBtn.textContent = '⏳ Calculating HASH & Chaining block…';
+
+  const formData = {
+    txn_type        : _txnType,
+    amount_pkr      : pkr,
+    exchange_rate   : rate,
+    amount_usdt     : usdt || (pkr / rate),
+    client_name     : name,
+    client_cnic     : cnic || '',
+    bank_name       : document.getElementById('fBankName').value || '',
+    bank_last4      : document.getElementById('fBankLast4').value.trim() || '',
+    order_id        : document.getElementById('fOrderId').value.trim() || '',
+    payment_ref     : document.getElementById('fPaymentRef').value.trim() || '',
+    notes           : document.getElementById('fNotes').value.trim() || '',
+    screenshot_path : _uploadedScreenshotBase64
+  };
+
+  try {
+    const response = await HashEngine.insertTransaction(formData);
+    
+    if (response.success) {
+      Toast.show(`🔥 Block chained! Receipt: ${response.receiptNumber}`, 'success');
+      
+      // Auto redirect to receipt viewer
+      setTimeout(() => {
+        window.location.href = `receipt.html?receipt=${encodeURIComponent(response.receiptNumber)}`;
+      }, 1000);
+    } else {
+      Toast.show(`Error chaining block: ${response.error}`, 'error');
+      lockBtn.disabled = false;
+      lockBtn.textContent = '💾 Lock Block & Generate Receipt';
+    }
+  } catch(e) {
+    Toast.show(`Chaining crash: ${e.message}`, 'error');
+    lockBtn.disabled = false;
+    lockBtn.textContent = '💾 Lock Block & Generate Receipt';
+  }
+}
+
+// ── UTILITIES ────────────────────────────────────────────
+function setTxt(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
+function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function setupSession() {
+  function tick() {
+    try {
+      const raw = localStorage.getItem('dems_session');
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      const left = Math.max(0, Math.floor((s.expiresAt - Date.now()) / 1000));
+      const m = Math.floor(left / 60), sec = left % 60;
+      setTxt('sessionTimer', m + ':' + String(sec).padStart(2 ,'0'));
+    } catch(e) {}
+  }
+  tick(); setInterval(tick, 1000);
+}
+
+function setupLogout() {
+  document.getElementById('logoutBtn').addEventListener('click', () => {
+    Auth.logout();
+  });
+}
+
+function setupMobileNav() {
+  const btn = document.getElementById('mobileMenuBtn');
+  const sb  = document.getElementById('sidebar');
+  const ov  = document.getElementById('mobileOverlay');
+  if (!btn) return;
+  btn.addEventListener('click', () => { sb.classList.toggle('open'); ov.classList.toggle('show'); });
+  ov.addEventListener('click', () => { sb.classList.remove('open'); ov.classList.remove('show'); });
+}
+
+const Toast = {
+  show(msg, type='info', dur=3500) {
+    const c = document.getElementById('toastContainer');
+    const t = document.createElement('div');
+    const icons = { success:'✅', error:'❌', info:'ℹ️', warning:'⚠️' };
+    t.className = `toast ${type}`;
+    t.innerHTML = `<span>${icons[type]||'ℹ️'}</span><span>${msg}</span>`;
+    c.appendChild(t);
+    setTimeout(() => { t.style.opacity='0'; t.style.transition='opacity 0.3s'; setTimeout(()=>t.remove(),300); }, dur);
+  }
+};
+</script>
+</body>
+</html>

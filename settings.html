@@ -101,6 +101,10 @@
 .nav-link-item:hover { background: var(--navy-3); color: var(--white); }
 .nav-link-item.active { background: var(--blue-glow); color: var(--blue); }
 
+/* Smooth scrolling for Settings Quick Links — purely visual, no layout change */
+html { scroll-behavior: smooth; }
+.section-card { scroll-margin-top: 76px; } /* keeps target clear of sticky topbar */
+
 /* ── MOBILE OVERLAY ─────────────────────────────────────── */
 .mobile-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 99; }
 .mobile-overlay.show { display: block; }
@@ -332,7 +336,7 @@
             </div>
 
             <div style="display:flex; justify-content:flex-end;">
-              <button class="btn-primary" onclick="saveAccessPin()">🔑 Save Pin Code</button>
+              <button type="button" class="btn-primary" id="savePinBtn" onclick="saveAccessPin()">🔑 Save Pin Code</button>
             </div>
 
           </form>
@@ -379,7 +383,7 @@
               <div class="maint-desc">Upload a previously exported database backup .db file to completely restore state blocks, users and logs.</div>
             </div>
             <div style="position:relative;">
-              <button class="btn-secondary">📤 Upload backup</button>
+              <button class="btn-secondary" id="importBackupBtn">📤 Upload backup</button>
               <input type="file" id="fImportFile" accept=".db" style="position:absolute; inset:0; opacity:0; cursor:pointer;" onchange="importDataFile(event)">
             </div>
           </div>
@@ -573,6 +577,20 @@ async function saveBusinessProfile() {
     return;
   }
 
+  // Safe UX addition: WhatsApp number format check (digits, optional leading +,
+  // 10-15 digits per E.164-style numbers). Does not alter the saved value.
+  if (!/^\+?\d{10,15}$/.test(whatsapp.replace(/[\s-]/g, ''))) {
+    Toast.show('WhatsApp number format looks invalid. Use digits only, e.g. +923001234567.', 'error');
+    return;
+  }
+
+  // Safe UX addition: enforce the session timeout range already declared on
+  // the input (min="2" max="60") at the JS layer too.
+  if (timerSetting < 2 || timerSetting > 60) {
+    Toast.show('Session timeout must be between 2 and 60 minutes.', 'error');
+    return;
+  }
+
   const payload = {
     businessName: name,
     logoEmoji: document.getElementById('fLogoEmoji').value,
@@ -633,10 +651,17 @@ async function saveComplianceSettings() {
 
 // ── CHANGE CREDENTIAL PIN ─────────────────────────────────
 async function saveAccessPin() {
+  const btn = document.getElementById('savePinBtn');
+  if (btn && btn.disabled) return; // prevent double-click submission
+
   const curr = document.getElementById('fCurrentPin').value;
   const pin1 = document.getElementById('fNewPin').value;
   const pin2 = document.getElementById('fConfirmPin').value;
 
+  if (!curr || curr.length !== 4 || !/^\d{4}$/.test(curr)) {
+    Toast.show('Current PIN must be exactly 4 digits.', 'error');
+    return;
+  }
   if (pin1.length !== 4 || !/^\d{4}$/.test(pin1)) {
     Toast.show('New PIN code must be exactly 4 digits.', 'error');
     return;
@@ -645,6 +670,9 @@ async function saveAccessPin() {
     Toast.show('Confirm PIN does not match.', 'error');
     return;
   }
+
+  const originalLabel = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Saving…'; }
 
   try {
     // Invoke Auth changePin
@@ -661,10 +689,18 @@ async function saveAccessPin() {
     }
   } catch(e) {
     Toast.show('System PIN transition error: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = originalLabel; }
   }
 }
 
 // ── DATABASE OFFLINE BACKUP ──────────────────────────────
+function formatBackupTimestamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+}
+
 async function exportDataFile() {
   try {
     // Export RAW uint8Array of sql DB
@@ -678,7 +714,7 @@ async function exportDataFile() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `DEMS-Backup-${new Date().toISOString().split('T')[0]}.db`;
+    link.download = `DEMS-Backup-${formatBackupTimestamp()}.db`;
     link.click();
     URL.revokeObjectURL(url);
 
@@ -694,6 +730,10 @@ async function importDataFile(event) {
   const file = event.target.files[0];
   if (!file) return;
 
+  const importBtn = document.getElementById('importBackupBtn');
+  if (importBtn && importBtn.disabled) return; // prevent double-click submission
+  const originalImportLabel = importBtn ? importBtn.innerHTML : '';
+
   const reader = new FileReader();
   reader.onload = async function(e) {
     try {
@@ -701,7 +741,12 @@ async function importDataFile(event) {
       const bytes = new Uint8Array(buffer);
 
       const confirmRestore = confirm('⚠️ CRITICAL WARNING! ⚠️\n\nRestoring this backup will completely OVERWRITE your active ledger, audit log, clients and profiles!\n\nAre you sure you want to load this external file?');
-      if (!confirmRestore) return;
+      if (!confirmRestore) {
+        event.target.value = ''; // allow re-selecting the same file later
+        return;
+      }
+
+      if (importBtn) { importBtn.disabled = true; importBtn.innerHTML = '⏳ Importing…'; }
 
       const importSuccess = await DB.importRaw(bytes);
       
@@ -716,9 +761,13 @@ async function importDataFile(event) {
           localStorage.removeItem('dems_session'); // clear active session to re-force login
           window.location.href = 'index.html';
         }, 1200);
+        return; // page is reloading — no need to restore button state
       }
     } catch(err) {
       Toast.show('Backup Import Failure: ' + err.message, 'error');
+    } finally {
+      if (importBtn) { importBtn.disabled = false; importBtn.innerHTML = originalImportLabel; }
+      event.target.value = ''; // allow re-selecting the same file after a failed/cancelled attempt
     }
   };
   reader.readAsArrayBuffer(file);

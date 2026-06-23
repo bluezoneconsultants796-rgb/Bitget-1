@@ -121,13 +121,10 @@
 
 <div class="mobile-overlay" id="mobileOverlay"></div>
 
-<!-- toast -->
 <div id="toastContainer" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
 
-<!-- ── APP SHELL ──────────────────────────────────────────── -->
 <div class="app-shell">
 
-  <!-- SIDEBAR -->
   <nav class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="sb-logo" id="sbLogo">⬡</div>
@@ -156,10 +153,8 @@
     </div>
   </nav>
 
-  <!-- MAIN AREA -->
   <div class="main-area">
 
-    <!-- TOPBAR -->
     <div class="page-topbar">
       <div class="ptb-left">
         <button class="mobile-menu-btn" id="mobileMenuBtn">☰</button>
@@ -170,13 +165,10 @@
       </div>
     </div>
 
-    <!-- BODY -->
     <div class="page-body">
 
-      <!-- LEFT: Forms sections -->
       <div>
         
-        <!-- 1. Profile update block -->
         <div class="section-card">
           <div class="section-title">🏢 Business Profile Details</div>
           <form id="profileForm" onsubmit="return false;">
@@ -249,7 +241,6 @@
           </form>
         </div>
 
-        <!-- 2. Credential block -->
         <div class="section-card">
           <div class="section-title">🔐 Change Access Security PIN</div>
           <form id="pinForm" onsubmit="return false;">
@@ -276,7 +267,6 @@
           </form>
         </div>
 
-        <!-- 3. Compliance / AML threshold block -->
         <div class="section-card" id="complianceForm">
           <div class="section-title">🛡️ Compliance (AML)</div>
           <form onsubmit="return false;">
@@ -299,7 +289,6 @@
           </form>
         </div>
 
-        <!-- 4. Backup and database restore box -->
         <div class="section-card" id="maintenance">
           <div class="section-title">💾 System Maintenance & Offline Backups</div>
 
@@ -324,7 +313,6 @@
 
           <div class="maint-tool" style="border-bottom:none; flex-direction:column; align-items:stretch; gap:14px;">
 
-            <!-- PERMANENT IMMUTABILITY NOTICE — not dismissible, no delete option exists below it -->
             <div style="display:flex; gap:12px; align-items:flex-start; padding:14px 16px; border-radius:var(--radius-md); background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.25);">
               <div style="font-size:20px; line-height:1;">🔒</div>
               <div style="font-size:12px; line-height:1.6; color:var(--muted);">
@@ -333,7 +321,6 @@
               </div>
             </div>
 
-            <!-- ARCHIVE INSTEAD OF DELETE -->
             <div class="maint-tool" style="border-bottom:none; padding:0;">
               <div class="maint-txt">
                 <div class="maint-name">Starting a Fresh Financial Period?</div>
@@ -342,7 +329,6 @@
               <button class="btn-secondary" onclick="exportDataFile()">📦 Export Full Backup</button>
             </div>
 
-            <!-- APP CONFIG RESET (renamed/scoped from old Factory Reset) -->
             <div class="maint-tool" style="border-bottom:none; padding:0; border-top:1px dashed var(--border-soft); padding-top:14px;">
               <div class="maint-txt">
                 <div class="maint-name" style="color:var(--red);">Reset App Configuration & Login</div>
@@ -356,7 +342,6 @@
 
       </div>
 
-      <!-- RIGHT: Side navigation shortcuts info -->
       <div>
         <div class="section-card" style="padding: 20px;">
           <div class="pane-title">🛠️ Settings Quick Links</div>
@@ -371,11 +356,7 @@
         </div>
       </div>
 
-    </div><!-- /body -->
-  </div><!-- /main area -->
-</div><!-- /app shell -->
-
-<script src="db.js"></script>
+    </div></div></div><script src="db.js"></script>
 <script src="auth.js"></script>
 <script src="profile.js"></script>
 <script src="audit-log.js"></script>
@@ -611,11 +592,24 @@ async function triggerFactoryReset() {
     return;
   }
 
+  // HARDENED: Log initiation event before database modifications run
+  try {
+    await AuditLog.add('APP_CONFIG_RESET_INITIATED', 'User authorized application configuration factory reset procedure.');
+  } catch (e) {
+    console.error('[Settings] Failed to write audit log for APP_CONFIG_RESET_INITIATED:', e);
+  }
+
   let resetSummary = null;
   try {
     // Scoped DB-level reset — only ever clears app_settings.
     resetSummary = await DB.resetAppConfigOnly();
   } catch (e) {
+    // HARDENED: Preserve explicit failure logging capture
+    try {
+      await AuditLog.add('APP_CONFIG_RESET_FAILED', `Configuration reset aborted due to database execution error: ${e.message}`);
+    } catch (logErr) {
+      console.error('[Settings] Could not write failure audit entry:', logErr);
+    }
     Toast.show('Could not reset app settings: ' + e.message, 'error');
     return;
   }
@@ -624,14 +618,14 @@ async function triggerFactoryReset() {
   localStorage.removeItem('dems_business_profile');
   localStorage.removeItem('dems_session');
   localStorage.removeItem('dems_lockout_attempts');
+  localStorage.removeItem('dems_credentials'); // HARDENED: Clears the exact auth key structure
   localStorage.removeItem('dems_credentials_pin_hash');
   localStorage.removeItem('dems_credentials_password_hash');
 
-  // High-severity audit entry regardless of how little or much was actually
-  // cleared — this is a security-relevant action and must always be logged.
+  // HARDENED: Final audit event confirming completion state and boundary verification metrics
   try {
     await AuditLog.add(
-      'APP_CONFIG_RESET',
+      'APP_CONFIG_RESET_COMPLETED',
       `SEVERITY: HIGH | Cleared app_settings (${resetSummary?.clearedRows ?? '?'} rows) + credential/session keys | ` +
       `Protected tables untouched — transactions: ${resetSummary?.survivingCounts?.transactions ?? '?'}, ` +
       `receipts: ${resetSummary?.survivingCounts?.receipts ?? '?'}, ` +
@@ -639,12 +633,11 @@ async function triggerFactoryReset() {
       `audit_log: ${resetSummary?.survivingCounts?.audit_log ?? '?'}`
     );
   } catch (e) {
-    // Even if logging fails, do not block the reset — but warn loudly.
-    console.error('[Settings] Failed to write audit log for APP_CONFIG_RESET:', e);
+    console.error('[Settings] Failed to write audit log for APP_CONFIG_RESET_COMPLETED:', e);
   }
 
   alert('⚙️ App configuration and login have been reset. Your transaction ledger, receipts, verification log, and audit log were not touched. Redirecting to onboarding setup.');
-  window.location.href = 'index.html';
+  window.location.replace('index.html'); // HARDENED: Use replace() to keep history cache secure
 }
 
 // ── CORE UTILS ───────────────────────────────────────────

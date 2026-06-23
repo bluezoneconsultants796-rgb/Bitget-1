@@ -115,16 +115,81 @@
   .mobile-menu-btn { display: block; }
   .form-row, .form-row.triple { grid-template-columns: 1fr; }
 }
+
+/* ── STORAGE MONITOR ────────────────────────────────────── */
+.storage-stats-row {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;
+}
+.storage-stat {
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md); padding: 14px 16px; text-align: center;
+  transition: border-color 0.3s;
+}
+.storage-stat-val {
+  font-family: var(--font-mono); font-size: 15px; font-weight: 600;
+  color: var(--white); margin-bottom: 4px; letter-spacing: 0.02em;
+}
+.storage-stat-lbl {
+  font-size: 10px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
+.storage-bar-wrap { margin-bottom: 16px; }
+.storage-bar-track {
+  position: relative; height: 10px;
+  background: rgba(255,255,255,0.07);
+  border-radius: 999px; overflow: visible; margin-bottom: 10px;
+}
+.storage-bar-fill {
+  height: 100%; border-radius: 999px;
+  transition: width 0.65s cubic-bezier(0.4,0,0.2,1), background 0.4s ease;
+  min-width: 0; position: relative; z-index: 1; overflow: hidden;
+}
+.stor-fill-healthy  { background: linear-gradient(90deg,#0ea5e9,#38bdf8); }
+.stor-fill-warning  { background: linear-gradient(90deg,#f59e0b,#fbbf24); }
+.stor-fill-critical { background: linear-gradient(90deg,#ef4444,#f87171); }
+.storage-bar-marker {
+  position: absolute; top: -3px; bottom: -3px; width: 2px;
+  background: rgba(255,255,255,0.18); border-radius: 2px;
+  pointer-events: none; z-index: 2;
+}
+.storage-bar-legend {
+  display: flex; gap: 18px; flex-wrap: wrap;
+  font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.07em;
+}
+.stor-leg-healthy  { color: #38bdf8; }
+.stor-leg-warning  { color: #fbbf24; }
+.stor-leg-critical { color: #f87171; }
+.storage-status-pill {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; border-radius: var(--radius-md);
+  font-size: 12.5px; font-weight: 500; border: 1px solid;
+  margin-bottom: 14px; transition: background 0.3s, border-color 0.3s;
+}
+.stor-pill-healthy  { background: rgba(14,165,233,0.07);  border-color: rgba(14,165,233,0.25); color: #38bdf8; }
+.stor-pill-warning  { background: rgba(245,158,11,0.07);  border-color: rgba(245,158,11,0.28);  color: #fbbf24; }
+.stor-pill-critical { background: rgba(239,68,68,0.07);   border-color: rgba(239,68,68,0.30);   color: #f87171; }
+.storage-warning-banner {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 14px 16px; border-radius: var(--radius-md);
+  background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.28);
+  margin-bottom: 18px;
+}
+@media (max-width: 680px) { .storage-stats-row { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 420px) { .storage-stats-row { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 
 <div class="mobile-overlay" id="mobileOverlay"></div>
 
+<!-- toast -->
 <div id="toastContainer" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
 
+<!-- ── APP SHELL ──────────────────────────────────────────── -->
 <div class="app-shell">
 
+  <!-- SIDEBAR -->
   <nav class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="sb-logo" id="sbLogo">⬡</div>
@@ -153,8 +218,10 @@
     </div>
   </nav>
 
+  <!-- MAIN AREA -->
   <div class="main-area">
 
+    <!-- TOPBAR -->
     <div class="page-topbar">
       <div class="ptb-left">
         <button class="mobile-menu-btn" id="mobileMenuBtn">☰</button>
@@ -165,10 +232,13 @@
       </div>
     </div>
 
+    <!-- BODY -->
     <div class="page-body">
 
+      <!-- LEFT: Forms sections -->
       <div>
         
+        <!-- 1. Profile update block -->
         <div class="section-card">
           <div class="section-title">🏢 Business Profile Details</div>
           <form id="profileForm" onsubmit="return false;">
@@ -241,6 +311,7 @@
           </form>
         </div>
 
+        <!-- 2. Credential block -->
         <div class="section-card">
           <div class="section-title">🔐 Change Access Security PIN</div>
           <form id="pinForm" onsubmit="return false;">
@@ -261,12 +332,13 @@
             </div>
 
             <div style="display:flex; justify-content:flex-end;">
-            <button type="button" class="btn-primary" onclick="saveAccessPin()">🔑 Save Pin Code</button>
+              <button class="btn-primary" onclick="saveAccessPin()">🔑 Save Pin Code</button>
             </div>
 
           </form>
         </div>
 
+        <!-- 3. Compliance / AML threshold block -->
         <div class="section-card" id="complianceForm">
           <div class="section-title">🛡️ Compliance (AML)</div>
           <form onsubmit="return false;">
@@ -289,6 +361,7 @@
           </form>
         </div>
 
+        <!-- 4. Backup and database restore box -->
         <div class="section-card" id="maintenance">
           <div class="section-title">💾 System Maintenance & Offline Backups</div>
 
@@ -313,6 +386,7 @@
 
           <div class="maint-tool" style="border-bottom:none; flex-direction:column; align-items:stretch; gap:14px;">
 
+            <!-- PERMANENT IMMUTABILITY NOTICE — not dismissible, no delete option exists below it -->
             <div style="display:flex; gap:12px; align-items:flex-start; padding:14px 16px; border-radius:var(--radius-md); background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.25);">
               <div style="font-size:20px; line-height:1;">🔒</div>
               <div style="font-size:12px; line-height:1.6; color:var(--muted);">
@@ -321,6 +395,7 @@
               </div>
             </div>
 
+            <!-- ARCHIVE INSTEAD OF DELETE -->
             <div class="maint-tool" style="border-bottom:none; padding:0;">
               <div class="maint-txt">
                 <div class="maint-name">Starting a Fresh Financial Period?</div>
@@ -329,6 +404,7 @@
               <button class="btn-secondary" onclick="exportDataFile()">📦 Export Full Backup</button>
             </div>
 
+            <!-- APP CONFIG RESET (renamed/scoped from old Factory Reset) -->
             <div class="maint-tool" style="border-bottom:none; padding:0; border-top:1px dashed var(--border-soft); padding-top:14px;">
               <div class="maint-txt">
                 <div class="maint-name" style="color:var(--red);">Reset App Configuration & Login</div>
@@ -340,8 +416,72 @@
           </div>
         </div>
 
+        <!-- 5. Storage Usage Monitor -->
+        <div class="section-card" id="storageMonitor">
+          <div class="section-title">📊 Storage Usage Monitor</div>
+
+          <!-- Critical warning banner — visible only when usage >80% -->
+          <div class="storage-warning-banner" id="storageWarningBanner" style="display:none;">
+            <div style="font-size:20px; line-height:1; flex-shrink:0;">⚠️</div>
+            <div style="font-size:12px; line-height:1.65; color:var(--muted);">
+              <strong style="color:#f87171; display:block; margin-bottom:4px;">Storage critically full — immediate action recommended.</strong>
+              Browser storage is above 80% capacity. Data write failures may occur if limits are reached. Export a full database backup now and move completed financial periods to archival storage to free up space.
+              <div style="margin-top:10px;">
+                <button class="btn-secondary" onclick="exportDataFile()" style="font-size:11px; padding:6px 14px;">📥 Export Backup Now</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4 stat tiles -->
+          <div class="storage-stats-row">
+            <div class="storage-stat">
+              <div class="storage-stat-val" id="storDbSize">—</div>
+              <div class="storage-stat-lbl">Database Size</div>
+            </div>
+            <div class="storage-stat">
+              <div class="storage-stat-val" id="storTotalUsed">—</div>
+              <div class="storage-stat-lbl">Total Used</div>
+            </div>
+            <div class="storage-stat">
+              <div class="storage-stat-val" id="storLimit">~5.00 MB</div>
+              <div class="storage-stat-lbl">Est. Limit</div>
+            </div>
+            <div class="storage-stat" id="storPctTile">
+              <div class="storage-stat-val" id="storPct">—</div>
+              <div class="storage-stat-lbl">Usage</div>
+            </div>
+          </div>
+
+          <!-- Progress bar with zone markers -->
+          <div class="storage-bar-wrap">
+            <div class="storage-bar-track">
+              <div class="storage-bar-fill stor-fill-healthy" id="storBarFill" style="width:0%;"></div>
+              <div class="storage-bar-marker" style="left:50%;" title="50% threshold"></div>
+              <div class="storage-bar-marker" style="left:80%;" title="80% threshold"></div>
+            </div>
+            <div class="storage-bar-legend">
+              <span class="stor-leg-healthy">● Healthy &lt;50%</span>
+              <span class="stor-leg-warning">● Warning 50–80%</span>
+              <span class="stor-leg-critical">● Critical &gt;80%</span>
+            </div>
+          </div>
+
+          <!-- Status pill -->
+          <div class="storage-status-pill stor-pill-healthy" id="storStatusPill">
+            <span id="storStatusIcon">⏳</span>
+            <span id="storStatusText">Calculating storage usage…</span>
+          </div>
+
+          <!-- Footer row: last-updated label + manual refresh -->
+          <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+            <span style="font-size:11px; color:var(--muted);" id="storLastUpdated">Not yet measured</span>
+            <button class="btn-secondary" onclick="StorageMonitor.update()" style="font-size:11px; padding:6px 14px;">↻ Refresh</button>
+          </div>
+        </div>
+
       </div>
 
+      <!-- RIGHT: Side navigation shortcuts info -->
       <div>
         <div class="section-card" style="padding: 20px;">
           <div class="pane-title">🛠️ Settings Quick Links</div>
@@ -349,6 +489,7 @@
           <a class="nav-link-item" href="#pinForm">Credential Management</a>
           <a class="nav-link-item" href="#complianceForm">Compliance (AML)</a>
           <a class="nav-link-item" href="#maintenance">Backups & Recovery</a>
+          <a class="nav-link-item" href="#storageMonitor">Storage Monitor</a>
           <div style="border-top:1px solid var(--border-soft); margin-top:20px; padding-top:20px; font-size:11.5px; color:var(--muted); line-height:1.6;">
             <strong>DEMS Cryptographic Node v1.2</strong><br>
             All SQLite tables have indexes deployed. Hashing engine runs Web Crypto Native SHA-256 signatures immediately.
@@ -356,7 +497,11 @@
         </div>
       </div>
 
-    </div></div></div><script src="db.js"></script>
+    </div><!-- /body -->
+  </div><!-- /main area -->
+</div><!-- /app shell -->
+
+<script src="db.js"></script>
 <script src="auth.js"></script>
 <script src="profile.js"></script>
 <script src="audit-log.js"></script>
@@ -487,8 +632,7 @@ async function saveComplianceSettings() {
 }
 
 // ── CHANGE CREDENTIAL PIN ─────────────────────────────────
-async function saveAccessPin(event) {
-  if (event) event.preventDefault();
+async function saveAccessPin() {
   const curr = document.getElementById('fCurrentPin').value;
   const pin1 = document.getElementById('fNewPin').value;
   const pin2 = document.getElementById('fConfirmPin').value;
@@ -593,24 +737,11 @@ async function triggerFactoryReset() {
     return;
   }
 
-  // HARDENED: Log initiation event before database modifications run
-  try {
-    await AuditLog.add('APP_CONFIG_RESET_INITIATED', 'User authorized application configuration factory reset procedure.');
-  } catch (e) {
-    console.error('[Settings] Failed to write audit log for APP_CONFIG_RESET_INITIATED:', e);
-  }
-
   let resetSummary = null;
   try {
     // Scoped DB-level reset — only ever clears app_settings.
     resetSummary = await DB.resetAppConfigOnly();
   } catch (e) {
-    // HARDENED: Preserve explicit failure logging capture
-    try {
-      await AuditLog.add('APP_CONFIG_RESET_FAILED', `Configuration reset aborted due to database execution error: ${e.message}`);
-    } catch (logErr) {
-      console.error('[Settings] Could not write failure audit entry:', logErr);
-    }
     Toast.show('Could not reset app settings: ' + e.message, 'error');
     return;
   }
@@ -619,14 +750,14 @@ async function triggerFactoryReset() {
   localStorage.removeItem('dems_business_profile');
   localStorage.removeItem('dems_session');
   localStorage.removeItem('dems_lockout_attempts');
-  localStorage.removeItem('dems_credentials'); // HARDENED: Clears the exact auth key structure
   localStorage.removeItem('dems_credentials_pin_hash');
   localStorage.removeItem('dems_credentials_password_hash');
 
-  // HARDENED: Final audit event confirming completion state and boundary verification metrics
+  // High-severity audit entry regardless of how little or much was actually
+  // cleared — this is a security-relevant action and must always be logged.
   try {
     await AuditLog.add(
-      'APP_CONFIG_RESET_COMPLETED',
+      'APP_CONFIG_RESET',
       `SEVERITY: HIGH | Cleared app_settings (${resetSummary?.clearedRows ?? '?'} rows) + credential/session keys | ` +
       `Protected tables untouched — transactions: ${resetSummary?.survivingCounts?.transactions ?? '?'}, ` +
       `receipts: ${resetSummary?.survivingCounts?.receipts ?? '?'}, ` +
@@ -634,11 +765,12 @@ async function triggerFactoryReset() {
       `audit_log: ${resetSummary?.survivingCounts?.audit_log ?? '?'}`
     );
   } catch (e) {
-    console.error('[Settings] Failed to write audit log for APP_CONFIG_RESET_COMPLETED:', e);
+    // Even if logging fails, do not block the reset — but warn loudly.
+    console.error('[Settings] Failed to write audit log for APP_CONFIG_RESET:', e);
   }
 
   alert('⚙️ App configuration and login have been reset. Your transaction ledger, receipts, verification log, and audit log were not touched. Redirecting to onboarding setup.');
-  window.location.replace('index.html'); // HARDENED: Use replace() to keep history cache secure
+  window.location.href = 'index.html';
 }
 
 // ── CORE UTILS ───────────────────────────────────────────

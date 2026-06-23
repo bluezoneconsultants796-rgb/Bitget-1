@@ -261,7 +261,7 @@
             </div>
 
             <div style="display:flex; justify-content:flex-end;">
-              <button class="btn-primary" onclick="saveAccessPin()">🔑 Save Pin Code</button>
+            <button type="button" class="btn-primary" onclick="saveAccessPin()">🔑 Save Pin Code</button>
             </div>
 
           </form>
@@ -487,7 +487,8 @@ async function saveComplianceSettings() {
 }
 
 // ── CHANGE CREDENTIAL PIN ─────────────────────────────────
-async function saveAccessPin() {
+async function saveAccessPin(event) {
+  if (event) event.preventDefault();
   const curr = document.getElementById('fCurrentPin').value;
   const pin1 = document.getElementById('fNewPin').value;
   const pin2 = document.getElementById('fConfirmPin').value;

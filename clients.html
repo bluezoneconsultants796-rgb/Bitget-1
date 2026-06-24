@@ -398,10 +398,10 @@ input.flagged:checked + .toggle-track { background: var(--red); border-color: va
 <div class="mobile-overlay" id="mobileOverlay"></div>
 
 <!-- Toast -->
-<div id="toastContainer"></div>
+<div id="toastContainer" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ── SIDEBAR ───────────────────────────────────────────── -->
-<nav class="sidebar" id="sidebar">
+<nav role="navigation" class="sidebar" id="sidebar">
   <div class="sidebar-brand">
     <span class="sb-logo" id="sbLogo">⬡</span>
     <div class="sb-name"><span id="sbBizName">Exchange</span><small>DEMS v1.0</small></div>
@@ -411,7 +411,7 @@ input.flagged:checked + .toggle-track { background: var(--red); border-color: va
   <a href="dashboard.html" class="nav-item"><span class="nav-icon">📊</span> Dashboard</a>
   <a href="new-transaction.html" class="nav-item"><span class="nav-icon">➕</span> New Transaction</a>
   <a href="transactions.html" class="nav-item"><span class="nav-icon">📋</span> All Transactions</a>
-  <a href="clients.html" class="nav-item active"><span class="nav-icon">👤</span> Client KYC</a>
+  <a href="clients.html" class="nav-item active" aria-current="page"><span class="nav-icon">👤</span> Client KYC</a>
 
   <span class="nav-group-label">System</span>
   <a href="chain-integrity.html" class="nav-item"><span class="nav-icon">🔗</span> Chain Integrity</a>

@@ -369,13 +369,59 @@ const DB = (() => {
     async init() {
       if (_db) return _db;
 
-      // Load sql.js from local bundle (SEC-FIX 4 — CDN removed)
+      // UX-FIX 5: Load sql.js from local vendor bundle with a full-page error
+      // fallback. If the vendor/sql-wasm.js file cannot be fetched (missing
+      // vendor directory, file server not running, first-load offline), the
+      // onerror renders a descriptive blocking overlay so users see a clear
+      // message instead of a cryptic JS exception or a silently broken app.
       await new Promise((resolve, reject) => {
         if (window.initSqlJs) { resolve(); return; }
         const script = document.createElement('script');
         script.src = 'vendor/sql-wasm.js';
         script.onload = resolve;
-        script.onerror = reject;
+        script.onerror = () => {
+          // Render a full-page, non-dismissable error overlay.
+          const overlay = document.createElement('div');
+          overlay.id = 'dems-load-error';
+          overlay.style.cssText = [
+            'position:fixed', 'inset:0', 'z-index:999999',
+            'background:#080f1c', 'display:flex', 'flex-direction:column',
+            'align-items:center', 'justify-content:center',
+            'font-family:system-ui,sans-serif', 'padding:32px', 'text-align:center'
+          ].join(';');
+          overlay.innerHTML = `
+            <div style="font-size:52px;margin-bottom:20px;">⚠️</div>
+            <h1 style="color:#ef4444;font-size:22px;margin-bottom:12px;font-weight:700;">
+              Database Engine Failed to Load
+            </h1>
+            <p style="color:#f0f6ff;max-width:480px;line-height:1.7;font-size:14px;margin-bottom:8px;">
+              DEMS could not load <strong style="color:#f59e0b;font-family:monospace;">vendor/sql-wasm.js</strong>
+              — the local SQLite engine required for all data operations.
+            </p>
+            <p style="color:#6b8099;max-width:480px;line-height:1.7;font-size:13px;margin-bottom:24px;">
+              This usually means the <code style="color:#0ea5e9;">vendor/</code> folder is missing from
+              the same directory as this HTML file. Make sure you extracted the full DEMS package
+              and that your browser can read local files (or that your local file server is running).
+            </p>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;">
+              <button onclick="location.reload()"
+                style="background:#0ea5e9;color:#fff;border:none;padding:11px 24px;
+                       border-radius:6px;font-size:14px;font-weight:700;cursor:pointer;">
+                🔄 Reload Page
+              </button>
+              <button onclick="document.getElementById('dems-load-error').remove()"
+                style="background:#1a2f4c;color:#f0f6ff;border:1px solid #1a2f4c;
+                       padding:11px 24px;border-radius:6px;font-size:14px;cursor:pointer;">
+                Dismiss (debug only)
+              </button>
+            </div>
+            <p style="color:#6b8099;font-size:11px;margin-top:20px;">
+              Error: vendor/sql-wasm.js could not be fetched.
+            </p>
+          `;
+          document.body.appendChild(overlay);
+          reject(new Error('sql-wasm.js failed to load — vendor directory missing or inaccessible.'));
+        };
         document.head.appendChild(script);
       });
 

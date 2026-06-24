@@ -248,13 +248,13 @@
 <div class="mobile-overlay" id="mobileOverlay"></div>
 
 <!-- toast -->
-<div id="toastContainer" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
+<div id="toastContainer" aria-live="polite" aria-atomic="true" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
 
 <!-- ── APP SHELL ──────────────────────────────────────────── -->
 <div class="app-shell">
 
   <!-- SIDEBAR -->
-  <nav class="sidebar" id="sidebar">
+  <nav role="navigation" class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="sb-logo" id="sbLogo">⬡</div>
       <div class="sb-name">
@@ -265,7 +265,7 @@
 
     <div class="nav-group-label">Main</div>
     <a href="dashboard.html" class="nav-item"><span class="nav-icon">📊</span> Dashboard</a>
-    <a href="new-transaction.html" class="nav-item active"><span class="nav-icon">➕</span> New Transaction</a>
+    <a href="new-transaction.html" class="nav-item active" aria-current="page"><span class="nav-icon">➕</span> New Transaction</a>
     <a href="transactions.html" class="nav-item"><span class="nav-icon">📋</span> All Transactions</a>
     <a href="clients.html" class="nav-item"><span class="nav-icon">👥</span> Clients KYC</a>
 
@@ -323,12 +323,12 @@
                 <div class="triple-grid">
                   <div class="form-group">
                     <label class="form-label">PKR Volume <span class="req">*</span></label>
-                    <input type="number" step="any" min="0" class="form-input mono" id="fAmountPkr" placeholder="Total PKR" required>
+                    <input type="number" step="any" min="0" class="form-input mono" id="fAmountPkr" placeholder="Total PKR" required aria-required="true">
                     <div class="field-error-text" id="errPkr">Volume must be positive.</div>
                   </div>
                   <div class="form-group">
                     <label class="form-label">Exchange Rate <span class="req">*</span></label>
-                    <input type="number" step="any" min="0" class="form-input mono" id="fExchangeRate" placeholder="PKR/USDT Rate" required>
+                    <input type="number" step="any" min="0" class="form-input mono" id="fExchangeRate" placeholder="PKR/USDT Rate" required aria-required="true">
                     <div class="field-error-text" id="errRate">Rate must be positive.</div>
                   </div>
                   <div class="form-group">
@@ -389,7 +389,7 @@
               <div class="double-grid">
                 <div class="form-group lookup-wrapper">
                   <label class="form-label">Client Full Name <span class="req">*</span></label>
-                  <input type="text" class="form-input" id="fClientName" placeholder="Muhammad Ali" required>
+                  <input type="text" class="form-input" id="fClientName" placeholder="Muhammad Ali" required aria-required="true">
                   <div class="field-error-text" id="errName">Full Name is required.</div>
                   <!-- lookup box name -->
                   <div class="lookup-results" id="nameLookupResults"></div>

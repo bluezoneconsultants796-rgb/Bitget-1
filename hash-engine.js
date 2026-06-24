@@ -142,22 +142,46 @@ const HashEngine = (() => {
   // ════════════════════════════════════════════════════════
 
   const CLOCK_DRIFT_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
-  const TIME_API_URL = 'https://worldtimeapi.org/api/timezone/Etc/UTC';
-  const TIME_API_TIMEOUT_MS = 4000;
+  // UX-FIX 4: Multi-source time API with per-source timeout and sequential fallback.
+  // If worldtimeapi.org is unavailable, timeapi.io is tried automatically.
+  // fetchNetworkTime() throws only if ALL sources fail — callers handle that via
+  // checkNetworkTime() which never throws and sets checked:false on any failure.
+  const TIME_APIS = [
+    {
+      url  : 'https://worldtimeapi.org/api/timezone/Etc/UTC',
+      parse: d => {
+        if (!d || !d.utc_datetime) throw new Error('worldtimeapi: missing utc_datetime');
+        return new Date(d.utc_datetime).getTime();
+      }
+    },
+    {
+      url  : 'https://timeapi.io/api/time/current/zone?timeZone=UTC',
+      parse: d => {
+        if (!d || !d.dateTime) throw new Error('timeapi.io: missing dateTime');
+        return new Date(d.dateTime).getTime();
+      }
+    }
+  ];
+  const TIME_API_TIMEOUT_MS = 3000; // per-source timeout (ms)
 
   async function fetchNetworkTime() {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), TIME_API_TIMEOUT_MS);
-
-    try {
-      const res = await fetch(TIME_API_URL, { signal: controller.signal, cache: 'no-store' });
-      if (!res.ok) throw new Error(`Time API responded with ${res.status}`);
-      const data = await res.json();
-      if (!data || !data.utc_datetime) throw new Error('Time API response missing utc_datetime');
-      return new Date(data.utc_datetime).getTime();
-    } finally {
-      clearTimeout(timeoutId);
+    const errors = [];
+    for (const api of TIME_APIS) {
+      const ctrl = new AbortController();
+      const tid  = setTimeout(() => ctrl.abort(), TIME_API_TIMEOUT_MS);
+      try {
+        const res = await fetch(api.url, { signal: ctrl.signal, cache: 'no-store' });
+        clearTimeout(tid);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        return api.parse(data); // returns epoch ms on success
+      } catch (e) {
+        clearTimeout(tid);
+        errors.push(`${api.url}: ${e.message}`);
+        // continue to next source
+      }
     }
+    throw new Error('All time APIs unavailable. Tried: ' + errors.join('; '));
   }
 
   /**

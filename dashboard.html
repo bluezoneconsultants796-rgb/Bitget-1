@@ -324,14 +324,14 @@
 </div>
 
 <!-- ── TOAST CONTAINER ────────────────────────────────────── -->
-<div id="toastContainer"></div>
+<div id="toastContainer" aria-live="polite" aria-atomic="true"></div>
 <div class="mobile-overlay" id="mobileOverlay"></div>
 
 <!-- ── APP SHELL ──────────────────────────────────────────── -->
 <div class="app-shell">
 
   <!-- SIDEBAR -->
-  <nav class="sidebar" id="sidebar">
+  <nav role="navigation" class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="sb-logo" id="sbLogo">⬡</div>
       <div class="sb-name">
@@ -341,7 +341,7 @@
     </div>
 
     <div class="nav-group-label">Main</div>
-    <a href="dashboard.html" class="nav-item active"><span class="nav-icon">📊</span> Dashboard</a>
+    <a href="dashboard.html" class="nav-item active" aria-current="page"><span class="nav-icon">📊</span> Dashboard</a>
     <a href="new-transaction.html" class="nav-item"><span class="nav-icon">➕</span> New Transaction</a>
     <a href="transactions.html" class="nav-item"><span class="nav-icon">📋</span> All Transactions</a>
     <a href="clients.html" class="nav-item"><span class="nav-icon">👥</span> Clients KYC</a>

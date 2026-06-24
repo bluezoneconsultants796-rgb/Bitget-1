@@ -197,13 +197,13 @@ html { scroll-behavior: smooth; }
 <div class="mobile-overlay" id="mobileOverlay"></div>
 
 <!-- toast -->
-<div id="toastContainer" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
+<div id="toastContainer" aria-live="polite" aria-atomic="true" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
 
 <!-- ── APP SHELL ──────────────────────────────────────────── -->
 <div class="app-shell">
 
   <!-- SIDEBAR -->
-  <nav class="sidebar" id="sidebar">
+  <nav role="navigation" class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="sb-logo" id="sbLogo">⬡</div>
       <div class="sb-name">
@@ -222,7 +222,7 @@ html { scroll-behavior: smooth; }
     <a href="chain-integrity.html" class="nav-item"><span class="nav-icon">🔐</span> Chain Integrity</a>
     <a href="reports.html" class="nav-item"><span class="nav-icon">📑</span> Reports</a>
     <a href="backup.html" class="nav-item"><span class="nav-icon">💾</span> Backup &amp; Restore</a>
-    <a href="settings.html" class="nav-item active"><span class="nav-icon">⚙️</span> Settings</a>
+    <a href="settings.html" class="nav-item active" aria-current="page"><span class="nav-icon">⚙️</span> Settings</a>
     <a href="audit-log-view.html" class="nav-item"><span class="nav-icon">📁</span> Audit Logs</a>
 
     <div class="sidebar-footer">
@@ -259,7 +259,7 @@ html { scroll-behavior: smooth; }
             <div class="form-row">
               <div class="form-group">
                 <label class="form-label">Business Name <span class="req">*</span></label>
-                <input type="text" class="form-input" id="fBusinessName" required>
+                <input type="text" class="form-input" id="fBusinessName" required aria-required="true">
               </div>
               <div class="form-group">
                 <label class="form-label">Logo Emoji <span class="req">*</span></label>
@@ -274,15 +274,15 @@ html { scroll-behavior: smooth; }
             <div class="form-row triple">
               <div class="form-group">
                 <label class="form-label">City <span class="req">*</span></label>
-                <input type="text" class="form-input" id="fCity" required>
+                <input type="text" class="form-input" id="fCity" required aria-required="true">
               </div>
               <div class="form-group">
                 <label class="form-label">Area <span class="req">*</span></label>
-                <input type="text" class="form-input" id="fArea" required>
+                <input type="text" class="form-input" id="fArea" required aria-required="true">
               </div>
               <div class="form-group">
                 <label class="form-label">Full Street Address <span class="req">*</span></label>
-                <input type="text" class="form-input" id="fAddress" required>
+                <input type="text" class="form-input" id="fAddress" required aria-required="true">
               </div>
             </div>
 
@@ -293,14 +293,14 @@ html { scroll-behavior: smooth; }
               </div>
               <div class="form-group">
                 <label class="form-label">WhatsApp Number <span class="req">*</span></label>
-                <input type="text" class="form-input" id="fWhatsapp" placeholder="+923001234567" required>
+                <input type="text" class="form-input" id="fWhatsapp" placeholder="+923001234567" required aria-required="true">
               </div>
             </div>
 
             <div class="form-row triple">
               <div class="form-group">
                 <label class="form-label">SECP Reg Number <span class="req">*</span></label>
-                <input type="text" class="form-input" id="fSecpNumber" required>
+                <input type="text" class="form-input" id="fSecpNumber" required aria-required="true">
               </div>
               <div class="form-group">
                 <label class="form-label">NTN Code Number</label>
@@ -332,15 +332,15 @@ html { scroll-behavior: smooth; }
             <div class="form-row triple">
               <div class="form-group">
                 <label class="form-label">Current PIN <span class="req">*</span></label>
-                <input type="password" class="form-input mono" id="fCurrentPin" placeholder="••••" maxlength="4" required>
+                <input type="password" class="form-input mono" id="fCurrentPin" placeholder="••••" maxlength="4" required aria-required="true">
               </div>
               <div class="form-group">
                 <label class="form-label">New PIN <span class="req">*</span></label>
-                <input type="password" class="form-input mono" id="fNewPin" placeholder="••••" maxlength="4" required>
+                <input type="password" class="form-input mono" id="fNewPin" placeholder="••••" maxlength="4" required aria-required="true">
               </div>
               <div class="form-group">
                 <label class="form-label">Confirm New PIN <span class="req">*</span></label>
-                <input type="password" class="form-input mono" id="fConfirmPin" placeholder="••••" maxlength="4" required>
+                <input type="password" class="form-input mono" id="fConfirmPin" placeholder="••••" maxlength="4" required aria-required="true">
               </div>
             </div>
 

@@ -174,14 +174,40 @@
 
 /* ── PRINT 80MM ROLL FORMAT ─────────────────────────────── */
 @media print {
-  body { background: #fff; color: #000; }
-  .sidebar, .page-topbar, .ptb-right, .ptb-left button, .sidebar-footer, #toastContainer, .mobile-overlay { display: none !important; }
+  /* ── UX-FIX 3: Comprehensive print stylesheet ── */
+
+  /* Hide all chrome/navigation elements */
+  .sidebar, .page-topbar, .ptb-right, .ptb-left button, .sidebar-footer,
+  #toastContainer, .mobile-overlay, .btn-primary, .btn-secondary, .btn-danger,
+  .btn-ghost, .mobile-menu-btn, .mobileMenuBtn { display: none !important; }
+
+  /* Clean white page */
+  body, .main-area { background: white !important; color: black !important; margin: 0; }
+
+  /* Full-width layout */
   .main-area { margin-left: 0 !important; width: 100% !important; min-height: auto !important; }
   .page-body { grid-template-columns: 1fr !important; padding: 0 !important; margin: 0 !important; max-width: 80mm !important; }
-  .receipt-card { border: none !important; box-shadow: none !important; padding: 0 !important; width: 80mm !important; font-size: 12px !important; }
+
+  /* Receipt card: clean bordered box, no shadows */
+  .receipt-card {
+    border: 1px solid #ccc !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    width: 80mm !important;
+    font-size: 12px !important;
+    max-width: 100% !important;
+  }
+
+  /* Hash: wrap long hex strings at any character */
+  .receipt-hash { font-size: 9px !important; word-break: break-all !important; }
+
+  /* Flatten all colors to black-on-white */
+  * { color: black !important; background: white !important; border-color: #ccc !important; }
+
+  /* Keep dark-panel hidden */
   .dark-panel { display: none !important; }
-  
-  /* Page size adjustments for thermal roll printer */
+
+  /* Page size for thermal roll printer */
   @page {
     size: 80mm auto;
     margin: 4mm 2mm;
@@ -216,13 +242,13 @@
   </div>
 </div>
 
-<div id="toastContainer"></div>
+<div id="toastContainer" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ── APP SHELL ──────────────────────────────────────────── -->
 <div class="app-shell">
 
   <!-- SIDEBAR (Dynamic profile logo and bizname handled) -->
-  <nav class="sidebar" id="sidebar">
+  <nav role="navigation" class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="sb-logo" id="sbLogo">⬡</div>
       <div class="sb-name">

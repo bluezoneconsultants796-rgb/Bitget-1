@@ -222,13 +222,13 @@
 <div class="mobile-overlay" id="mobileOverlay"></div>
 
 <!-- toast -->
-<div id="toastContainer" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
+<div id="toastContainer" aria-live="polite" aria-atomic="true" style="position: fixed; top: 76px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px;"></div>
 
 <!-- ── APP SHELL ──────────────────────────────────────────── -->
 <div class="app-shell">
 
   <!-- SIDEBAR -->
-  <nav class="sidebar" id="sidebar">
+  <nav role="navigation" class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="sb-logo" id="sbLogo">⬡</div>
       <div class="sb-name">
@@ -245,7 +245,7 @@
 
     <div class="nav-group-label">System</div>
     <a href="chain-integrity.html" class="nav-item"><span class="nav-icon">🔐</span> Chain Integrity</a>
-    <a href="reports.html" class="nav-item active"><span class="nav-icon">📑</span> Reports</a>
+    <a href="reports.html" class="nav-item active" aria-current="page"><span class="nav-icon">📑</span> Reports</a>
     <a href="settings.html" class="nav-item"><span class="nav-icon">⚙️</span> Settings</a>
     <a href="audit-log-view.html" class="nav-item"><span class="nav-icon">📁</span> Audit Logs</a>
 

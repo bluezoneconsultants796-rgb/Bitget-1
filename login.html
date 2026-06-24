@@ -224,18 +224,18 @@
 
       <!-- Keypad -->
       <div class="pin-grid">
-        <div class="pin-key" onclick="pinPress('1')">1</div>
-        <div class="pin-key" onclick="pinPress('2')">2</div>
-        <div class="pin-key" onclick="pinPress('3')">3</div>
-        <div class="pin-key" onclick="pinPress('4')">4</div>
-        <div class="pin-key" onclick="pinPress('5')">5</div>
-        <div class="pin-key" onclick="pinPress('6')">6</div>
-        <div class="pin-key" onclick="pinPress('7')">7</div>
-        <div class="pin-key" onclick="pinPress('8')">8</div>
-        <div class="pin-key" onclick="pinPress('9')">9</div>
-        <div class="pin-key key-del" onclick="pinDel()">⌫ Del</div>
-        <div class="pin-key" onclick="pinPress('0')">0</div>
-        <div class="pin-key key-enter" onclick="pinSubmit()">Login ↵</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 1" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('1')">1</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 2" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('2')">2</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 3" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('3')">3</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 4" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('4')">4</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 5" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('5')">5</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 6" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('6')">6</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 7" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('7')">7</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 8" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('8')">8</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 9" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('9')">9</div>
+        <div class="pin-key key-del" role="button" tabindex="0" aria-label="Delete last digit" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinDel()">⌫ Del</div>
+        <div class="pin-key" role="button" tabindex="0" aria-label="Press 0" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinPress('0')">0</div>
+        <div class="pin-key key-enter" role="button" tabindex="0" aria-label="Submit PIN" onkeydown="if(event.key==='Enter'||event.key===' '){this.click();event.preventDefault();}" onclick="pinSubmit()">Login ↵</div>
       </div>
 
       <div class="mode-toggle">

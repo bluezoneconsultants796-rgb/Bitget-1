@@ -204,3 +204,77 @@ h1, h2, h3, h4, h5 {
 .toast.error   { border-left: 4px solid var(--red); }
 .toast.info    { border-left: 4px solid var(--blue); }
 .toast.warning { border-left: 4px solid var(--gold); }
+
+/* ══════════════════════════════════════════════════════════
+   UX-FIX 2 — Mobile Responsive Layout
+   ══════════════════════════════════════════════════════════ */
+
+@media (max-width: 768px) {
+  .app-shell { flex-direction: column; }
+
+  /* Hide sidebar by default; shown when .open is toggled */
+  .sidebar {
+    display: none;
+    position: fixed;
+    left: 0; top: 0;
+    z-index: 100;
+    height: 100vh;
+    width: 220px;
+  }
+  .sidebar.open { display: flex; }
+
+  /* Remove desktop left-margin so content uses full width */
+  .main-area { margin-left: 0 !important; }
+
+  /* Show mobile hamburger button */
+  .mobile-menu-btn { display: flex !important; }
+
+  /* Stats/metric grids: 2 columns on tablet */
+  .stats-grid          { grid-template-columns: repeat(2, 1fr) !important; }
+  .metric-report-grid  { grid-template-columns: repeat(2, 1fr) !important; }
+
+  /* Tables: horizontal scroll container instead of overflow clipping */
+  .data-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Title bars: stack vertically */
+  .page-title-bar,
+  .page-topbar .ptb-left,
+  .report-controls {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  /* Full-width action buttons on narrow viewports */
+  .report-controls .btn-primary,
+  .report-controls .btn-secondary { width: 100%; justify-content: center; }
+
+  /* Reduce page padding */
+  .page-body { padding: 16px !important; }
+
+  /* Chain-integrity progress area */
+  .chain-stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
+}
+
+@media (max-width: 480px) {
+  /* Single-column grids on phones */
+  .stats-grid          { grid-template-columns: 1fr !important; }
+  .metric-report-grid  { grid-template-columns: 1fr !important; }
+  .chain-stats-grid    { grid-template-columns: 1fr !important; }
+
+  /* Two-col form rows collapse to single col */
+  .form-row-2col,
+  .report-controls   { grid-template-columns: 1fr !important; }
+
+  /* Slightly smaller headings */
+  .page-title { font-size: 16px !important; }
+
+  /* PIN keypad: shrink keys slightly so all 12 fit comfortably */
+  .pin-key {
+    padding: 12px 8px !important;
+    font-size: 18px !important;
+  }
+
+  /* Reduce receipt card padding */
+  .receipt-card { padding: 16px !important; }
+}

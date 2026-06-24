@@ -251,18 +251,18 @@ const DB = (() => {
     async init() {
       if (_db) return _db;
 
-      // Load sql.js from CDN
+      // Load sql.js from local bundle (SEC-FIX 4 — CDN removed)
       await new Promise((resolve, reject) => {
-        if (window.SQL) { resolve(); return; }
+        if (window.initSqlJs) { resolve(); return; }
         const script = document.createElement('script');
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js';
+        script.src = 'vendor/sql-wasm.js';
         script.onload = resolve;
         script.onerror = reject;
         document.head.appendChild(script);
       });
 
       const SQL = await window.initSqlJs({
-        locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${file}`
+        locateFile: file => `vendor/${file}`
       });
 
       // Restore existing DB or create new
@@ -477,13 +477,22 @@ const DB = (() => {
     /**
      * getNextReceiptNumber()
      * Generates sequential receipt number: EXC-YYYY-NNNNN
+     *
+     * INTEGRITY-FIX 1: Uses MAX() + SUBSTR parsing instead of COUNT(*).
+     * COUNT was unsafe because voided records (is_void = 1) still occupy a
+     * numbered slot — counting only live rows produced collisions when the
+     * next insert tried to reuse a receipt_number that already exists in the
+     * UNIQUE index. MAX() always finds the true high-water mark regardless
+     * of how many voids exist between slots, guaranteeing monotonically
+     * increasing receipt numbers with no gaps or collisions.
      */
     async getNextReceiptNumber() {
       const year = new Date().getFullYear();
-      const row  = await this.get(
-        `SELECT COUNT(*) as cnt FROM transactions WHERE receipt_number LIKE 'EXC-${year}-%'`
+      const row = await this.get(
+        `SELECT MAX(CAST(SUBSTR(receipt_number, 10) AS INTEGER)) as maxNum
+         FROM transactions WHERE receipt_number LIKE 'EXC-${year}-%'`
       );
-      const next = (row?.cnt || 0) + 1;
+      const next = (row?.maxNum || 0) + 1;
       return `EXC-${year}-${String(next).padStart(5, '0')}`;
     },
 
@@ -592,7 +601,7 @@ const DB = (() => {
      */
     async importRaw(data) {
       const SQL = await window.initSqlJs({
-        locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${file}`
+        locateFile: file => `vendor/${file}`
       });
       _db = new SQL.Database(data);
       flushStorage();   // immediate — backup restore should persist before any redirect
@@ -602,14 +611,36 @@ const DB = (() => {
     /**
      * getStats()
      * Quick stats for dashboard (Phase 06)
+     *
+     * INTEGRITY-FIX 3: All COUNT and SUM queries now exclude voided records
+     * so that dashboard figures reflect only effective (economically real)
+     * transactions. Two categories are filtered out:
+     *   • is_void = 1      — the void/correction entry itself (not a real txn)
+     *   • chain_index IN   — the original record that has been voided
+     *     (identified via voids_chain_index on the void entry)
+     * This matches the same effective-transaction definition used by reports
+     * and hash-chain traversal, keeping every stat surface consistent.
      */
     async getStats() {
-      const txnCount = await this.get('SELECT COUNT(*) as cnt FROM transactions');
+      // Shared exclusion clause used by every query in this method.
+      // "Effective" = not a void entry AND not a record that has been voided.
+      const EFFECTIVE = `
+        is_void = 0
+        AND chain_index NOT IN (
+          SELECT COALESCE(voids_chain_index, -1) FROM transactions WHERE is_void = 1
+        )
+      `;
+
+      const txnCount = await this.get(
+        `SELECT COUNT(*) as cnt FROM transactions WHERE ${EFFECTIVE}`
+      );
       const clients  = await this.get('SELECT COUNT(*) as cnt FROM clients');
       const today    = new Date().toISOString().split('T')[0];
       const todayTxn = await this.get(
         `SELECT COUNT(*) as cnt, COALESCE(SUM(amount_pkr),0) as vol
-         FROM transactions WHERE timestamp LIKE '${today}%'`
+         FROM transactions
+         WHERE timestamp LIKE '${today}%'
+           AND ${EFFECTIVE}`
       );
       return {
         totalTransactions: txnCount?.cnt || 0,
@@ -630,6 +661,10 @@ const DB = (() => {
     //  caller) so a UI bug or careless edit elsewhere can't expand
     //  what gets erased.
     // ════════════════════════════════════════════════════════
+    // INTEGRITY-FIX 4: 'audit_log' is explicitly listed here so that no reset,
+    // maintenance, or factory-wipe path can ever truncate or drop it.
+    // AuditLog.clear() in audit-log.js is renamed _clearDEVONLY() and guarded
+    // behind a localhost-only check — the two defences work in concert.
     PROTECTED_TABLES: ['transactions', 'receipts', 'verification_log', 'audit_log'],
 
     /**

@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self';
+           script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com;
+           style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com;
+           font-src https://fonts.gstatic.com;
+           connect-src 'self' https://worldtimeapi.org;
+           img-src 'self' data: blob:;
+           object-src 'none';
+           base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>New Transaction — DEMS</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -871,6 +880,31 @@ function removeUploadedScreenshot() {
   Toast.show('📷 Attachment removed.', 'info');
 }
 
+// ── COMPLIANCE-FIX 1: AML Rolling-Window Structuring Check ────────────────
+// Queries all non-void transactions for this client in the past 24 hours
+// and flags when the new transaction would push the rolling total above the
+// AML CNIC threshold across 3+ transactions — the classic structuring pattern.
+// Never blocks submission outright; raises a non-blocking warning banner and
+// demands CNIC so the operator cannot proceed anonymously.
+async function checkStructuring(clientName, clientCnic, currentAmountPkr) {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  let total = 0, count = 0;
+  const field = clientCnic ? 'client_cnic' : 'client_name';
+  const val   = clientCnic || clientName;
+  if (val) {
+    const rows = await DB.all(
+      `SELECT amount_pkr FROM transactions WHERE ${field} = ? AND timestamp > ? AND is_void = 0`,
+      [val, since]
+    );
+    rows.forEach(r => { total += parseFloat(r.amount_pkr) || 0; count++; });
+  }
+  const newTotal = total + currentAmountPkr;
+  if (newTotal > _amlCnicThresholdPkr && count >= 2) {
+    return { structuringDetected: true, rollingTotal: newTotal, txnCount: count + 1 };
+  }
+  return { structuringDetected: false };
+}
+
 // ── SAVE AND LOCK TRANSACTION ──
 async function saveAndLockTransaction() {
   // Validate fields
@@ -949,6 +983,97 @@ async function saveAndLockTransaction() {
     Toast.show('⏰ Device clock looks wrong — fix it before locking this transaction.', 'warning', 6000);
   } else if (!clockCheck.checked) {
     Toast.show('ℹ️ Could not verify device clock against network time (offline?). Proceeding — this transaction will be marked clock-unverified.', 'info', 5000);
+  }
+
+  lockBtn.textContent = '⏳ Running compliance checks…';
+
+  // ── COMPLIANCE-FIX 1: AML Structuring Detection ─────────────────────────
+  // Rolling 24-hour window check: if this transaction would push the client's
+  // total above the AML threshold across 3+ transactions (classic structuring),
+  // show a non-blocking warning banner and require CNIC before proceeding.
+  try {
+    const structCheck = await checkStructuring(name, cnic, pkr);
+    if (structCheck.structuringDetected) {
+      // Show the compliance banner with structuring details
+      const banner = document.getElementById('complianceBanner');
+      const reasonTxt = document.getElementById('complianceReason');
+      banner.classList.add('show');
+      reasonTxt.textContent =
+        `⚠️ AML STRUCTURING ALERT — This client has made ${structCheck.txnCount} transactions ` +
+        `in the past 24 hours totalling ₨ ${Math.round(structCheck.rollingTotal).toLocaleString()}, ` +
+        `which exceeds the AML threshold of ₨ ${Math.round(_amlCnicThresholdPkr).toLocaleString()}. ` +
+        `CNIC is now mandatory.`;
+
+      AuditLog.add(
+        'STRUCTURING_ALERT',
+        `Client: ${name || cnic} | Rolling 24h total: PKR ${Math.round(structCheck.rollingTotal).toLocaleString()} ` +
+        `| Txn count: ${structCheck.txnCount} | AML threshold: PKR ${Math.round(_amlCnicThresholdPkr).toLocaleString()}`
+      );
+
+      // Force CNIC entry if not already supplied
+      if (!cnic) {
+        const errEl = document.getElementById('errCnic');
+        errEl.textContent = `CNIC is mandatory — AML structuring pattern detected (${structCheck.txnCount} txns, ₨ ${Math.round(structCheck.rollingTotal).toLocaleString()} in 24h).`;
+        errEl.classList.add('show');
+        document.getElementById('fClientCnic').focus();
+        Toast.show('🚨 AML Structuring Alert — CNIC required before proceeding.', 'error', 6000);
+        lockBtn.disabled = false;
+        lockBtn.textContent = '💾 Lock Block & Generate Receipt';
+        return;
+      }
+
+      // CNIC already provided — let operator confirm awareness before proceeding
+      const proceed = confirm(
+        `🚨 AML STRUCTURING ALERT 🚨\n\n` +
+        `This client has made ${structCheck.txnCount} transactions in the past 24 hours ` +
+        `totalling ₨ ${Math.round(structCheck.rollingTotal).toLocaleString()}, ` +
+        `exceeding the AML threshold of ₨ ${Math.round(_amlCnicThresholdPkr).toLocaleString()}.\n\n` +
+        `This pattern may constitute transaction structuring to evade reporting requirements.\n\n` +
+        `CNIC is on record. Do you confirm this is a legitimate transaction and acknowledge the AML alert?`
+      );
+      if (!proceed) {
+        lockBtn.disabled = false;
+        lockBtn.textContent = '💾 Lock Block & Generate Receipt';
+        return;
+      }
+    }
+  } catch (structErr) {
+    // Non-fatal — log the failure but do not block the transaction
+    console.warn('[NewTransaction] Structuring check failed:', structErr);
+    AuditLog.add('STRUCTURING_CHECK_ERROR', `Check failed: ${structErr.message}`);
+  }
+
+  // ── COMPLIANCE-FIX 2: Duplicate Transaction Detection ───────────────────
+  // Catches accidental double-submissions: if an identical (client, amount,
+  // type) combination was recorded within the last 60 seconds, prompt the
+  // operator to confirm this is intentional before proceeding.
+  try {
+    const since60s = new Date(Date.now() - 60000).toISOString();
+    const duplicate = await DB.get(
+      'SELECT id, receipt_number FROM transactions WHERE client_name = ? AND amount_pkr = ? AND txn_type = ? AND timestamp > ?',
+      [name, pkr, _txnType, since60s]
+    );
+    if (duplicate) {
+      const proceed = confirm(
+        `Possible Duplicate Transaction Detected!\n\n` +
+        `A ${_txnType.toUpperCase()} transaction for the same client and amount was recorded just now ` +
+        `(Receipt: ${duplicate.receipt_number}).\n\n` +
+        `Are you sure this is a NEW transaction and not a duplicate submission?`
+      );
+      if (!proceed) {
+        lockBtn.disabled = false;
+        lockBtn.textContent = '💾 Lock Block & Generate Receipt';
+        return;
+      }
+      AuditLog.add(
+        'DUPLICATE_WARNING_BYPASSED',
+        `Operator confirmed duplicate-looking transaction. Original: ${duplicate.receipt_number}`
+      );
+    }
+  } catch (dupErr) {
+    // Non-fatal — log but do not block
+    console.warn('[NewTransaction] Duplicate check failed:', dupErr);
+    AuditLog.add('DUPLICATE_CHECK_ERROR', `Check failed: ${dupErr.message}`);
   }
 
   lockBtn.textContent = '⏳ Calculating HASH & Chaining block…';

@@ -2,11 +2,20 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self';
+           script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com;
+           style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com;
+           font-src https://fonts.gstatic.com;
+           connect-src 'self' https://worldtimeapi.org;
+           img-src 'self' data: blob:;
+           object-src 'none';
+           base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Dashboard — DEMS</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" integrity="sha512-ZnR2AmqHD/KFi6iAkumQpAq7lmVK5TFqxj5XXDKy6MBIiNpEi/RNjSuCmXQYiLgKHfHtUFV7dXvYjvGq4mfA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
 /* ── LAYOUT ─────────────────────────────────────────────── */
 .app-shell { display: flex; min-height: 100vh; }

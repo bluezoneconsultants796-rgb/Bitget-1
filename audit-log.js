@@ -148,10 +148,23 @@ const AuditLog = (() => {
     },
 
     /**
-     * clear()
-     * WARNING: Permanently deletes audit log — use only for testing/reset
+     * _clearDEVONLY()
+     * INTEGRITY-FIX 4: Renamed from clear() to prevent accidental invocation
+     * via the browser console in production.  A localhost guard is added so
+     * that execution is silently blocked on any non-development origin — the
+     * method returns undefined without any side-effects, making it
+     * indistinguishable from a no-op to a casual console attacker.
+     *
+     * To use in development: call AuditLog._clearDEVONLY() from localhost only.
+     * WARNING: Permanently deletes audit log — use only for testing/reset.
      */
-    async clear() {
+    async _clearDEVONLY() {
+      // Block execution on any non-localhost origin, silently.
+      const host = window.location.hostname;
+      if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') {
+        console.warn('[AuditLog] _clearDEVONLY() is only permitted on localhost. Blocked.');
+        return;
+      }
       this.add('AUDIT_LOG_CLEARED', 'Audit log was manually cleared');
       localStorage.removeItem(LOG_KEY);
       try {

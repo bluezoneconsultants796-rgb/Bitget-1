@@ -623,6 +623,26 @@ async function runRestore() {
 
     await DB.importRaw(dbBytes);
 
+    // INTEGRITY-FIX 2: Verify chain immediately after restore.
+    // A corrupt or tampered backup will import without error (the AES-GCM tag
+    // only proves the file wasn't altered after encryption; it says nothing
+    // about whether the chain was intact inside the original DB). Running
+    // verifyChain() here catches that case and surfaces it to the operator
+    // before the 3-second logout countdown begins, giving them a chance to
+    // act rather than silently inheriting a broken ledger.
+    try {
+      const verifyResult = await HashEngine.verifyChain();
+      if (!verifyResult.chainIntact) {
+        showStatus(restoreStatus, 'error',
+          `Restore completed but chain integrity check FAILED: ${verifyResult.message}. This backup may be corrupted or tampered. Proceed with caution.`);
+        await AuditLog.add('RESTORE_CHAIN_FAIL', `Chain compromised after restore: ${verifyResult.message}`);
+      }
+    } catch (verifyErr) {
+      // HashEngine unavailable (e.g. not yet loaded) — log and continue.
+      console.warn('[Restore] Chain verify skipped:', verifyErr.message);
+      await AuditLog.add('RESTORE_CHAIN_FAIL', `Chain verify threw during restore: ${verifyErr.message}`);
+    }
+
     logStatus = 'success';
     logNotes += ` | Duration: ${Date.now() - startTime}ms`;
 

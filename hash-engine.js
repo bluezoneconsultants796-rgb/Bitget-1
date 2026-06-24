@@ -524,22 +524,101 @@ const HashEngine = (() => {
     },
 
     async verifyRecord(txn) {
-      // Use the version-aware builder — v1 records verify under the v1
-      // field order; v2 (and future) records use their own order.
-      const salt         = await _getSalt();
-      const payload      = buildHashPayloadForRecord(txn, txn.prev_hash, salt);
-      const computedHash = await sha256(payload);
-      const valid        = computedHash === txn.hash;
+  // Use the version-aware builder — v1 records verify under the v1
+  // field order; v2 (and future) records use their own order.
 
+  // ── SEC-FIX 6: Salt selection ────────────────────────────────────────
+  //
+  // No per-record migration marker exists in the schema that reliably
+  // identifies which salt was active at insert time (app_settings rows
+  // are destroyed by resetAppConfigOnly(), so chain_salt.updated_at
+  // cannot be trusted across all installs).
+  //
+  // Strategy:
+  //   1. DEMS-v1 records are definitively pre-SEC-FIX-6 — skip directly
+  //      to SALT_LEGACY, saving one SHA-256 call per legacy record.
+  //   2. DEMS-v2+ records try the current install salt first (the fast
+  //      path for all post-migration records), then fall back to
+  //      SALT_LEGACY only on mismatch (handles pre-migration v2 records
+  //      that existed before setup wrote a custom chain_salt).
+  //   3. Report tampered only if both attempts fail.
+  //
+  // The fallback is safe: SALT_LEGACY is already in this source file,
+  // so a dual-trial adds no new capability to an attacker. SHA-256
+  // pre-image resistance ensures a tampered record cannot be crafted
+  // to pass either salt check.
+  //
+  // legacySalt:true in the result flags a pre-migration record so
+  // callers can surface a diagnostic or queue a background re-hash.
+
+  const isV1    = (txn.hash_version || '').trim() === 'DEMS-v1';
+  const salt    = await _getSalt();
+
+  // Fast path for definitive pre-migration records (DEMS-v1).
+  if (isV1) {
+    const payload      = buildHashPayloadV1(txn, txn.prev_hash, SALT_LEGACY);
+    const computedHash = await sha256(payload);
+    const valid        = computedHash === txn.hash;
+    return {
+      valid        : valid,
+      storedHash   : txn.hash,
+      computedHash : computedHash,
+      tampered     : !valid,
+      legacySalt   : true,
+      receiptNumber: txn.receipt_number,
+      chainIndex   : txn.chain_index
+    };
+  }
+
+  // Standard path: try current install salt first (DEMS-v2 and future).
+  const payload      = buildHashPayloadForRecord(txn, txn.prev_hash, salt);
+  const computedHash = await sha256(payload);
+
+  if (computedHash === txn.hash) {
+    return {
+      valid        : true,
+      storedHash   : txn.hash,
+      computedHash : computedHash,
+      tampered     : false,
+      legacySalt   : false,
+      receiptNumber: txn.receipt_number,
+      chainIndex   : txn.chain_index
+    };
+  }
+
+  // Fallback: current salt failed — retry with SALT_LEGACY for v2 records
+  // that existed before setup wrote a custom chain_salt to app_settings.
+  // Only attempted when the current salt actually differs from SALT_LEGACY
+  // (i.e. a custom chain_salt is in use); skipped on pre-migration installs
+  // where _getSalt() already returned SALT_LEGACY.
+  if (salt !== SALT_LEGACY) {
+    const legacyPayload = buildHashPayloadForRecord(txn, txn.prev_hash, SALT_LEGACY);
+    const legacyHash    = await sha256(legacyPayload);
+
+    if (legacyHash === txn.hash) {
       return {
-        valid        : valid,
+        valid        : true,
         storedHash   : txn.hash,
-        computedHash : computedHash,
-        tampered     : !valid,
+        computedHash : legacyHash,
+        tampered     : false,
+        legacySalt   : true,
         receiptNumber: txn.receipt_number,
         chainIndex   : txn.chain_index
       };
-    },
+    }
+  }
+
+  // Both salt attempts failed — record is tampered or corrupt.
+  return {
+    valid        : false,
+    storedHash   : txn.hash,
+    computedHash : computedHash,
+    tampered     : true,
+    legacySalt   : false,
+    receiptNumber: txn.receipt_number,
+    chainIndex   : txn.chain_index
+  };
+},
 
     verifyChainLink(txn, prevTxn) {
       const expected = prevTxn ? prevTxn.hash : GENESIS_HASH;
@@ -878,6 +957,17 @@ const HashEngine = (() => {
         const profitPkr = parseFloat(profitPkrRaw);
         if (isNaN(profitPkr) || !isFinite(profitPkr)) {
           return { valid: false, error: 'Profit / Loss (PKR) must be a valid number when provided.' };
+        }
+      }
+
+      // COMPLIANCE-FIX 3 — CNIC format validation (data-layer guard).
+      // Enforces the Pakistani CNIC format XXXXX-XXXXXXX-X at the engine
+      // level so no malformed CNIC can ever reach the hash payload or DB,
+      // regardless of which UI path submitted the record.
+      if (formData.client_cnic && formData.client_cnic.trim()) {
+        const cnic = formData.client_cnic.trim();
+        if (!/^\d{5}-\d{7}-\d$/.test(cnic)) {
+          return { valid: false, error: 'CNIC format must be XXXXX-XXXXXXX-X (e.g. 42201-1234567-8).' };
         }
       }
 

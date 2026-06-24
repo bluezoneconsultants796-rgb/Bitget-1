@@ -731,7 +731,12 @@
 'use strict';
 
 // ── STATE ─────────────────────────────────────────────────
+// SCALE-FIX 2: _allTxns is now populated LAZILY by _ensureAllTxns(),
+// not by a boot-time `SELECT * FROM transactions`. The Statement tab
+// (the default view) uses targeted SQL aggregation via
+// _loadSummaryFromDB() and never needs the full dataset at all.
 let _allTxns = [];
+let _allTxnsLoaded = false;
 let _filteredStatementData = [];
 let _logFiltered = [];
 let _volumeTrendChart = null;
@@ -742,6 +747,21 @@ let _rateChart = null;
 // since the correction entry's amounts are a copy of the original.
 // Built in buildVoidSet() after every load.
 let _voidedChainIndexes = new Set();
+
+// ── LAZY FULL-LOAD HELPER (SCALE-FIX 2) ───────────────────
+/**
+ * _ensureAllTxns()
+ * Loads every transaction into _allTxns exactly once, on demand.
+ * Call this only from tabs that genuinely need the full dataset
+ * (Chain Log, Clients, Rate Analysis, Tax Summary, Volume/Export).
+ * The Statement tab does NOT call this — it uses SQL aggregation.
+ */
+async function _ensureAllTxns() {
+  if (_allTxnsLoaded) return;
+  _allTxns = await DB.all('SELECT * FROM transactions ORDER BY chain_index ASC');
+  _voidedChainIndexes = buildVoidSet(_allTxns);
+  _allTxnsLoaded = true;
+}
 
 // ── VOID HELPERS ──────────────────────────────────────────
 function buildVoidSet(txns) {
@@ -784,15 +804,16 @@ window.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('fStartDate').value = prior.toISOString().split('T')[0];
   document.getElementById('fEndDate').value = today.toISOString().split('T')[0];
 
-  // Retrieve files ledger pool
-  _allTxns = await DB.all('SELECT * FROM transactions ORDER BY chain_index ASC');
-  _voidedChainIndexes = buildVoidSet(_allTxns);
+  // ── NO full `SELECT * FROM transactions` here any more (SCALE-FIX 2) ──
+  // _allTxns is now loaded lazily by _ensureAllTxns(), only when the
+  // user opens a tab that needs the full dataset (see switchTab below).
+  // The default Statement tab is populated via SQL aggregation in
+  // generateReport() / _loadSummaryFromDB() and never touches _allTxns.
 
   setupSession();
   setupMobileNav();
   setupLogout();
   setupTabs();
-  populateTaxYearOptions();
 });
 
 // ── SIDEBAR PROFILE ───────────────────────────────────────
@@ -822,18 +843,81 @@ function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
 
-  if (name === 'volume') renderVolumeReportTab();
-  else if (name === 'log') renderTransactionLog();
-  else if (name === 'clients') renderClientReportTab();
-  else if (name === 'rate') renderRateAnalysisTab();
-  else if (name === 'tax') renderTaxSummaryTab();
+  // SCALE-FIX 2: only tabs that need every row trigger the (now lazy)
+  // full load. 'statement' uses SQL aggregation directly in
+  // generateReport() and never calls _ensureAllTxns().
+  if (name === 'volume') _ensureAllTxns().then(renderVolumeReportTab);
+  else if (name === 'log') _ensureAllTxns().then(renderTransactionLog);
+  else if (name === 'clients') _ensureAllTxns().then(renderClientReportTab);
+  else if (name === 'rate') _ensureAllTxns().then(renderRateAnalysisTab);
+  else if (name === 'tax') _ensureAllTxns().then(renderTaxSummaryTab);
 }
 
 // ════════════════════════════════════════════════════════════
 //  LEDGER STATEMENT (bank-statement export) — unchanged logic
 // ════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════
+//  SCALE-FIX 2: SQL aggregation for the Statement tab
+//
+//  _loadSummaryFromDB() issues one aggregation query (COUNT/SUM/AVG)
+//  for the chosen date range and a second query for just the rows in
+//  that range — no full-table scan in JS, regardless of table size.
+// ══════════════════════════════════════════════════════════
+async function _loadSummaryFromDB(startDate, endDate) {
+  const startTs = startDate + 'T00:00:00.000Z';
+  const endTs   = endDate   + 'T23:59:59.999Z';
+
+  // is_void = 0 excludes the correction entry itself; the NOT IN
+  // subquery additionally excludes the voided *original* row, so the
+  // aggregate matches effectiveTxns() semantics exactly.
+  const summary = await DB.get(`
+    SELECT
+      COUNT(*)                                           AS total,
+      SUM(amount_pkr)                                    AS volume,
+      SUM(amount_usdt)                                   AS usdt,
+      AVG(exchange_rate)                                 AS avgRate,
+      SUM(CASE WHEN profit_pkr IS NOT NULL
+               THEN profit_pkr ELSE 0 END)                AS profit,
+      SUM(CASE WHEN profit_pkr IS NOT NULL THEN 1
+               ELSE 0 END)                                AS profitCount
+    FROM transactions
+    WHERE timestamp >= ? AND timestamp <= ?
+      AND is_void = 0
+      AND chain_index NOT IN (
+        SELECT voids_chain_index
+        FROM   transactions
+        WHERE  is_void = 1
+          AND  voids_chain_index IS NOT NULL
+      )
+  `, [startTs, endTs]);
+
+  // Full rows for the printable table — includes void entries so the
+  // audit trail stays complete (they're flagged visually), ordered by
+  // chain position to match the existing statement sequence.
+  const rows = await DB.all(`
+    SELECT *
+    FROM   transactions
+    WHERE  timestamp >= ? AND timestamp <= ?
+    ORDER  BY chain_index ASC
+  `, [startTs, endTs]);
+
+  // Void set scoped to just this range's rows (cheaper than the full chain).
+  const localVoidSet = new Set();
+  rows.forEach(t => {
+    if (Number(t.is_void) === 1 && t.voids_chain_index != null) {
+      localVoidSet.add(Number(t.voids_chain_index));
+    }
+  });
+
+  return { summary, rows, localVoidSet };
+}
+
 function generateReport() {
+  _generateReportAsync();
+}
+
+async function _generateReportAsync() {
   const start = document.getElementById('fStartDate').value;
   const end = document.getElementById('fEndDate').value;
   const repType = document.getElementById('fReportType').value;
@@ -843,97 +927,62 @@ function generateReport() {
     return;
   }
 
-  // Filter transaction dataset
-  _filteredStatementData = _allTxns.filter(t => {
-    const tDate = t.timestamp.split('T')[0];
-    return tDate >= start && tDate <= end;
-  });
+  // ── SQL aggregation (SCALE-FIX 2) — single round-trip, no JS filter pass ──
+  const { summary, rows, localVoidSet } = await _loadSummaryFromDB(start, end);
 
-  if (_filteredStatementData.length === 0) {
+  if (!rows || rows.length === 0) {
     Toast.show('No blocks are chained within the selected boundary range.', 'warning');
-    // Hide components
     document.getElementById('visualReportSection').style.display = 'none';
     document.getElementById('statementHtmlDoc').classList.remove('show');
     return;
   }
 
+  // Cache the range rows for the SVG chart and CSV/Excel export.
+  _filteredStatementData = rows;
+  // Update the global void set so voidStatusLabel() / effectiveTxns()
+  // render correctly for these rows (chart + statement doc both use it).
+  _voidedChainIndexes = localVoidSet;
+
   document.getElementById('visualReportSection').style.display = 'block';
   document.getElementById('statementHtmlDoc').classList.add('show');
 
-  // Compute calculated metrics
-  calculateReportMetrics();
   renderDynamicSvgChart();
-  populateStatementA4Doc();
+  _populateStatementA4DocFromSQL(rows, summary, localVoidSet, start, end);
 
   AuditLog.add(
     'REPORT_GENERATED',
-    `Type: ${repType} | Range: ${start} to ${end} | Blocks: ${_filteredStatementData.length}`
+    `Type: ${repType} | Range: ${start} to ${end} | Blocks: ${rows.length}`
   );
   Toast.show('📑 Report metrics compiled and visual chart rendered.', 'success');
 }
 
-function calculateReportMetrics() {
-  // _filteredStatementData includes ALL rows in the date range (for full
-  // audit visibility). Effective txns exclude void pairs from sums.
-  const effData = effectiveTxns(_filteredStatementData);
-  let volumePkr = 0;
-  let totalRate = 0;
-  let count     = effData.length;
-
-  effData.forEach(t => {
-    volumePkr += parseFloat(t.amount_pkr) || 0;
-    totalRate += parseFloat(t.exchange_rate) || 0;
-  });
-
-  const avgRate = count > 0 ? (totalRate / count) : 0;
-  const totalBlocks = _filteredStatementData.length;
-  const voidExcluded = totalBlocks - count;
-
-  document.getElementById('metPkr').textContent = `₨ ${Math.round(volumePkr).toLocaleString()}`;
-  document.getElementById('metRate').textContent = avgRate.toFixed(3);
-  document.getElementById('metCount').textContent = `${count} Effective Block${count !== 1 ? 's' : ''}` +
-    (voidExcluded > 0 ? ` (${voidExcluded} void-pair row${voidExcluded !== 1 ? 's' : ''} excluded)` : '');
-}
-
-// ── POPULATE TABLE DOCUMENT ──────────────────────────────
-function populateStatementA4Doc() {
-  const start = document.getElementById('fStartDate').value;
-  const end = document.getElementById('fEndDate').value;
-
+// ── POPULATE TABLE DOCUMENT (SQL-derived totals — no JS re-summation) ──
+function _populateStatementA4DocFromSQL(rows, summary, localVoidSet, start, end) {
   document.getElementById('dStatementDateRange').innerHTML = `Statement Range: <strong>${start}</strong> to <strong>${end}</strong>`;
 
-  // Financial totals are computed only over EFFECTIVE rows — void pairs
-  // are excluded so the statement reflects the corrected ledger state.
-  // However, ALL rows are rendered in the table (with VOIDED / VOID ENTRY
-  // badges) so the full audit trail is visible in the printed document.
-  const effData = effectiveTxns(_filteredStatementData);
-  let totalPkr  = 0;
-  let totalUsdt = 0;
-  let totalRate = 0;
-  let totalProfit = 0;
-  let profitRecordCount = 0;
+  const total       = summary ? (summary.total || 0) : 0;
+  const totalPkr    = summary ? (summary.volume || 0) : 0;
+  const totalUsdt   = summary ? (summary.usdt || 0) : 0;
+  const avgRate     = summary ? (summary.avgRate || 0) : 0;
+  const totalProfit = summary ? (summary.profit || 0) : 0;
+  const profitRecordCount = summary ? (summary.profitCount || 0) : 0;
 
-  effData.forEach(t => {
-    totalPkr  += parseFloat(t.amount_pkr)      || 0;
-    totalUsdt += parseFloat(t.amount_usdt)     || 0;
-    totalRate += parseFloat(t.exchange_rate)   || 0;
-    const hasProfit = t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '';
-    if (hasProfit) {
-      totalProfit += parseFloat(t.profit_pkr) || 0;
-      profitRecordCount++;
-    }
-  });
+  const allRows      = rows.length;
+  const voidExcluded = allRows - total;
 
-  const count   = effData.length;
-  const avgRate = count > 0 ? (totalRate / count) : 0;
+  // ── Summary metric cards (replaces calculateReportMetrics()) ──
+  document.getElementById('metPkr').textContent = `₨ ${Math.round(totalPkr).toLocaleString()}`;
+  document.getElementById('metRate').textContent = avgRate.toFixed(3);
+  document.getElementById('metCount').textContent = `${total} Effective Block${total !== 1 ? 's' : ''}` +
+    (voidExcluded > 0 ? ` (${voidExcluded} void-pair row${voidExcluded !== 1 ? 's' : ''} excluded)` : '');
 
   const tbody = document.getElementById('statementTableBody');
 
-  tbody.innerHTML = _filteredStatementData.map(t => {
+  tbody.innerHTML = rows.map(t => {
     const isBuy = t.txn_type === 'buy';
     const hasProfit = t.profit_pkr !== null && t.profit_pkr !== undefined && t.profit_pkr !== '';
     const isVoidEntry  = Number(t.is_void) === 1;
-    const isVoidedOrig = !isVoidEntry && _voidedChainIndexes.has(Number(t.chain_index));
+    const isVoidedOrig = !isVoidEntry && localVoidSet.has(Number(t.chain_index));
     const isAffected   = isVoidEntry || isVoidedOrig;
 
     // Status cell for statement doc (light background)
@@ -965,9 +1014,7 @@ function populateStatementA4Doc() {
   }).join('');
 
   // Summary row counts
-  const totalBlocks   = _filteredStatementData.length;
-  const voidExcluded  = totalBlocks - count;
-  const blockLabel    = `${totalBlocks} Block${totalBlocks !== 1 ? 's' : ''} (${count} effective` +
+  const blockLabel = `${allRows} Block${allRows !== 1 ? 's' : ''} (${total} effective` +
     (voidExcluded > 0 ? `, ${voidExcluded} void-pair row${voidExcluded !== 1 ? 's' : ''} excluded from totals` : '') + ')';
 
   // Bind parameters
@@ -981,8 +1028,9 @@ function populateStatementA4Doc() {
 
   document.getElementById('docDatePrep').textContent = new Date().toLocaleString();
 
-  // Use tip of effective records for signature hash
-  const tipRecord = effData[effData.length - 1] || _filteredStatementData[_filteredStatementData.length - 1];
+  // Use tip of effective records (by chain position) for signature hash
+  const effRows = rows.filter(t => Number(t.is_void) !== 1 && !localVoidSet.has(Number(t.chain_index)));
+  const tipRecord = effRows[effRows.length - 1] || rows[rows.length - 1];
   document.getElementById('docSignHash').textContent = tipRecord ? tipRecord.hash.toUpperCase() : 'NONE';
 }
 
@@ -1546,8 +1594,9 @@ function exportStatementAsExcel() {
   Toast.show('📊 Statement Excel workbook downloaded.', 'success');
 }
 
-function exportFullWorkbookExcel() {
+async function exportFullWorkbookExcel() {
   if (!ensureXLSX()) return;
+  await _ensureAllTxns();   // SCALE-FIX 2: Export Center never visits Log/Clients/Tax tabs, so the full dataset must be loaded explicitly here.
   if (_allTxns.length === 0) {
     Toast.show('No transactions to export yet.', 'warning');
     return;
@@ -1605,7 +1654,8 @@ function exportFullWorkbookExcel() {
 //  CSV EXPORTS — Log / Clients / Tax (secondary options)
 // ════════════════════════════════════════════════════════════
 
-function exportTransactionLogCsv() {
+async function exportTransactionLogCsv() {
+  await _ensureAllTxns();   // SCALE-FIX 2: may be called from Export Center without having visited the Log tab first.
   const data = _logFiltered.length ? _logFiltered : _allTxns;
   if (data.length === 0) { Toast.show('No transactions to export.', 'warning'); return; }
 
@@ -1626,7 +1676,8 @@ function exportTransactionLogCsv() {
   Toast.show('📄 Transaction log CSV downloaded.', 'success');
 }
 
-function exportClientReportCsv() {
+async function exportClientReportCsv() {
+  await _ensureAllTxns();   // SCALE-FIX 2: may be called from Export Center without having visited the Clients tab first.
   const clients = computeClientSummary();
   if (clients.length === 0) { Toast.show('No client data to export.', 'warning'); return; }
 
@@ -1642,8 +1693,11 @@ function exportClientReportCsv() {
   Toast.show('📄 Client report CSV downloaded.', 'success');
 }
 
-function exportTaxSummaryCsv() {
-  const year = document.getElementById('taxYearSelect').value;
+async function exportTaxSummaryCsv() {
+  await _ensureAllTxns();   // SCALE-FIX 2: may be called from Export Center without having visited the Tax tab first.
+  const sel = document.getElementById('taxYearSelect');
+  if (!sel.options.length) populateTaxYearOptions();   // dropdown is empty if Tax tab was never opened
+  const year = sel.value || sel.options[0]?.value;
   const monthly = computeMonthlyTaxSummary(year);
   if (monthly.length === 0) { Toast.show('No tax data to export for this year.', 'warning'); return; }
 

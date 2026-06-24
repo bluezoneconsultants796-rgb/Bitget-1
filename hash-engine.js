@@ -287,6 +287,19 @@ const HashEngine = (() => {
       return await checkNetworkTime();
     },
 
+    /**
+     * getChainSalt()
+     * SCALE-FIX 3: Public read-only accessor for the per-install chain
+     * salt. Needed so chain-integrity.html can hand the salt to
+     * chain-verify-worker.js (a separate execution context that has no
+     * access to this module's private _getSalt()/_chainSalt cache).
+     * Does NOT change hash logic — it exposes the exact same value
+     * _getSalt() already uses internally for verifyRecord().
+     */
+    async getChainSalt() {
+      return await _getSalt();
+    },
+
     async prepareRecord(formData, clockCheck = null) {
       const timestamp = getDeviceTimestamp();
       const receiptNumber = await DB.getNextReceiptNumber();

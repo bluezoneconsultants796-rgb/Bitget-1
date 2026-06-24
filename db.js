@@ -7,7 +7,103 @@
 const DB = (() => {
 
   let _db = null;
-  const DB_KEY = 'dems_sqlite_db';
+  const DB_KEY = 'dems_sqlite_db'; // legacy localStorage key — used only for one-time migration detection
+
+  // ── SCALE-FIX 1: IndexedDB primary storage ──────────────
+  // The serialized sql.js Uint8Array now lives in IndexedDB instead of
+  // localStorage. localStorage has a ~5-10MB quota shared across the whole
+  // origin and forces synchronous base64 encode/decode on the main thread;
+  // IndexedDB has a much larger quota and stores the Uint8Array directly
+  // (no base64 inflation). DB_KEY / localStorage are kept only so that
+  // _migrateFromLocalStorageIfNeeded() can find and migrate pre-existing
+  // installs on their first boot after this update.
+  const IDB_NAME  = 'dems_idb';
+  const IDB_STORE = 'sqlite';
+  const IDB_KEY   = 'db';
+
+  function _openIDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = (e) => {
+        const idb = e.target.result;
+        if (!idb.objectStoreNames.contains(IDB_STORE)) {
+          idb.createObjectStore(IDB_STORE);
+        }
+      };
+      req.onsuccess = (e) => resolve(e.target.result);
+      req.onerror   = (e) => reject(e.target.error);
+    });
+  }
+
+  // _saveToIDB(uint8Array) — atomically persists the DB blob to IndexedDB.
+  // Resolves only once the IDB transaction has committed.
+  function _saveToIDB(data) {
+    return _openIDB().then(idb => new Promise((resolve, reject) => {
+      const tx = idb.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).put(data, IDB_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror    = (e) => reject(e.target.error);
+    }));
+  }
+
+  // _loadFromIDB() — returns the stored Uint8Array, or null if none exists yet.
+  function _loadFromIDB() {
+    return _openIDB().then(idb => new Promise((resolve, reject) => {
+      const req = idb.transaction(IDB_STORE, 'readonly')
+                      .objectStore(IDB_STORE)
+                      .get(IDB_KEY);
+      req.onsuccess = (e) => resolve(e.target.result || null);
+      req.onerror   = (e) => reject(e.target.error);
+    }));
+  }
+
+  // _decodeLegacyLocalStorageBlob(raw) — mirrors the old loadFromStorage()
+  // decode path (base64 string, or a legacy JSON array fallback) so the
+  // migration reads exactly what the pre-SCALE-FIX-1 code would have read.
+  function _decodeLegacyLocalStorageBlob(raw) {
+    try {
+      if (!raw) return null;
+      if (raw.charAt(0) === '[') {
+        return new Uint8Array(JSON.parse(raw));
+      }
+      const binaryStr = atob(raw);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+      return bytes;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * _migrateFromLocalStorageIfNeeded()
+   * One-time, atomic migration: if IndexedDB has no DB blob yet but
+   * localStorage still holds the legacy dems_sqlite_db entry, copy the
+   * decoded bytes into IndexedDB and only then remove the localStorage
+   * entry. IDB is written before localStorage is cleared, so if the
+   * tab is killed mid-migration, localStorage is left intact and the
+   * migration safely retries on next boot — it never loses data.
+   *
+   * Returns the migrated Uint8Array, or null if there was nothing to migrate.
+   */
+  async function _migrateFromLocalStorageIfNeeded() {
+    const lsRaw = localStorage.getItem(DB_KEY);
+    if (!lsRaw) return null;
+
+    const bytes = _decodeLegacyLocalStorageBlob(lsRaw);
+    if (!bytes) {
+      // Corrupt/unreadable legacy entry — nothing safe to migrate.
+      // Leave it in place rather than silently discarding it.
+      console.warn('[DB] Legacy localStorage DB entry could not be decoded; skipping migration.');
+      return null;
+    }
+
+    console.info('[DB] Migrating database from localStorage to IndexedDB…');
+    await _saveToIDB(bytes);              // commit to IDB first
+    localStorage.removeItem(DB_KEY);      // only then clear the legacy copy
+    console.info('[DB] Migration complete. localStorage cleared.');
+    return bytes;
+  }
 
   // ── SCHEMA ──────────────────────────────────────────────
   // All tables defined upfront. Phases use what they need.
@@ -161,28 +257,36 @@ const DB = (() => {
   // ── PERSISTENCE ─────────────────────────────────────────
 
   // _pendingSave: timer handle for the trailing debounce.
-  // _saveImmediate: the real synchronous export used by flush paths.
-  let _pendingSave = null;
+  // _saveImmediate: the real export+persist used by flush paths.
+  // _lastSavePromise: lets async callers (DB.flush()) await the actual
+  // IDB write instead of firing-and-forgetting like the old sync version.
+  let _pendingSave     = null;
+  let _lastSavePromise = Promise.resolve();
 
   function _saveImmediate() {
-    if (!_db) return;
+    if (!_db) return _lastSavePromise;
+    let data;
     try {
-      const data = _db.export();
-      let binaryStr = '';
-      const CHUNK = 0x8000;
-      for (let i = 0; i < data.length; i += CHUNK) {
-        binaryStr += String.fromCharCode.apply(null, data.subarray(i, i + CHUNK));
-      }
-      localStorage.setItem(DB_KEY, btoa(binaryStr));
+      data = _db.export();
     } catch (e) {
-      console.error('DB save error:', e);
+      console.error('[DB] export() failed:', e);
+      return _lastSavePromise;
+    }
+
+    _lastSavePromise = _saveToIDB(data).catch(e => {
+      console.error('[DB] IndexedDB save error:', e);
+      // IndexedDB quota errors surface as QuotaExceededError too, but the
+      // quota is far larger than localStorage's, so this banner now signals
+      // a genuinely exceptional condition (e.g. disk full) rather than the
+      // routine ~5-10MB ceiling localStorage used to hit during normal use.
       if (e.name === 'QuotaExceededError' || (e.message && e.message.includes('quota'))) {
         const banner = document.createElement('div');
         banner.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#fff;font-family:sans-serif;padding:40px;text-align:center;';
         banner.innerHTML = '<div style="font-size:48px;margin-bottom:16px;">🚨</div><h1 style="color:#ef4444;margin-bottom:16px;">STORAGE FULL — DATA NOT SAVED</h1><p style="max-width:500px;line-height:1.6;color:#fca5a5;">Browser storage is full. The last database changes were NOT persisted. Please go to Settings → Backup and create an encrypted backup immediately, then clear old data.</p><a href="backup.html" style="margin-top:24px;background:#ef4444;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:700;">Go to Backup Now</a>';
         document.body.appendChild(banner);
       }
-    }
+    });
+    return _lastSavePromise;
   }
 
   // saveToStorage() — debounced, trailing-edge, 2-second window.
@@ -204,27 +308,41 @@ const DB = (() => {
 
   // flushStorage() — cancels any pending debounce and writes immediately.
   // Called on beforeunload / visibilitychange-to-hidden to guarantee no
-  // in-flight writes are lost when the tab closes or navigates away.
+  // in-flight writes are lost when the tab closes or navigates away, and
+  // from DB.flush() for callers that need a guaranteed persist before a
+  // redirect. Returns the save Promise so async callers can await it;
+  // beforeunload/visibilitychange listeners ignore the return value since
+  // those events can't block navigation on an async write anyway — same
+  // best-effort guarantee the old synchronous localStorage write gave for
+  // truly abrupt closures (browser kill, crash), which neither approach
+  // can fully cover.
   function flushStorage() {
     if (_pendingSave !== null) {
       clearTimeout(_pendingSave);
       _pendingSave = null;
     }
-    _saveImmediate();
+    return _saveImmediate();
   }
 
-  function loadFromStorage() {
+  // loadFromStorage() — loads the DB blob, preferring IndexedDB and
+  // falling back to a one-time migration from legacy localStorage data.
+  async function loadFromStorage() {
+    let idbData = null;
     try {
-      const raw = localStorage.getItem(DB_KEY);
-      if (!raw) return null;
-      if (raw.charAt(0) === '[') {
-        return new Uint8Array(JSON.parse(raw));
-      }
-      const binaryStr = atob(raw);
-      const bytes = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-      return bytes;
-    } catch {
+      idbData = await _loadFromIDB();
+    } catch (e) {
+      console.warn('[DB] IndexedDB load failed:', e);
+    }
+
+    if (idbData) return idbData;
+
+    // IDB empty — check for a pre-existing localStorage install to migrate.
+    try {
+      return await _migrateFromLocalStorageIfNeeded();
+    } catch (e) {
+      // Migration failed (e.g. IDB write error) — leave localStorage intact
+      // so the next boot can retry, and fall back to a fresh DB this time.
+      console.error('[DB] Migration to IndexedDB failed, will retry next boot:', e);
       return null;
     }
   }
@@ -265,8 +383,11 @@ const DB = (() => {
         locateFile: file => `vendor/${file}`
       });
 
-      // Restore existing DB or create new
-      const existing = loadFromStorage();
+      // Restore existing DB or create new.
+      // loadFromStorage() is async: it checks IndexedDB first and, on a
+      // first boot after this update, transparently migrates any existing
+      // localStorage database into IndexedDB before returning it.
+      const existing = await loadFromStorage();
       if (existing) {
         _db = new SQL.Database(existing);
       } else {
@@ -413,12 +534,14 @@ const DB = (() => {
 
     /**
      * flush()
-     * Cancel any pending debounce and write the DB to localStorage right now.
-     * Use after a critical multi-step write sequence (e.g. insert txn + attachment)
-     * when you need the data persisted before navigating away.
+     * Cancel any pending debounce and write the DB to IndexedDB right now.
+     * Returns the save Promise — callers that must guarantee the write has
+     * landed before navigating away (e.g. before a redirect) should
+     * `await DB.flush()`. Fire-and-forget callers (beforeunload-style
+     * handlers) may ignore the return value, same as before.
      */
     flush() {
-      flushStorage();
+      return flushStorage();
     },
 
     /**

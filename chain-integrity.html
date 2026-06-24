@@ -844,7 +844,21 @@ function filterTable() {
   renderTable(filtered);
 }
 
-// ── FULL CHAIN VERIFY ──────────────────────────────────────
+// ── FULL CHAIN VERIFY (SCALE-FIX 3: Web Worker) ───────────
+//
+// Verification is now performed entirely off the main thread
+// via chain-verify-worker.js.  The UI stays responsive at any
+// chain length — progress bar updates arrive as postMessage
+// events rather than blocking the event loop.
+//
+// Flow:
+//   1. Load all transactions on the main thread (DB is not
+//      accessible inside a Worker context).
+//   2. Read the per-install chain salt via HashEngine.getChainSalt().
+//   3. Spawn chain-verify-worker.js and post { transactions, salt }.
+//   4. Handle progress / complete / error messages from the worker.
+//   5. On complete, write the AuditLog entry (worker has no DB
+//      access), refresh stats, and re-render the chain table.
 async function runFullVerify() {
   const btn       = document.getElementById('verifyBtn');
   const progWrap  = document.getElementById('progressWrap');
@@ -855,29 +869,124 @@ async function runFullVerify() {
   btn.disabled  = true;
   btn.innerHTML = '⏳ Verifying…';
   progWrap.classList.add('visible');
+  progLabel.textContent = 'Loading transactions…';
+  progPct.textContent   = '0%';
+  progFill.style.width  = '0%';
 
-  const onProgress = (current, total, pct) => {
-    progLabel.textContent = `Verifying record ${current} of ${total}…`;
-    progPct.textContent   = pct + '%';
-    progFill.style.width  = pct + '%';
+  // ── 1. Load data on the main thread ────────────────────
+  // Workers have no access to IndexedDB via the DB module, so
+  // we fetch the full chain here and pass it over postMessage.
+  // The array is transferred by structured clone; no shared memory
+  // is required and the main thread remains unblocked afterwards.
+  let transactions;
+  let salt;
+  try {
+    transactions = await DB.all(`SELECT * FROM transactions ORDER BY chain_index ASC`);
+    salt = await HashEngine.getChainSalt();
+  } catch (loadErr) {
+    progWrap.classList.remove('visible');
+    setStatusCard(false, 'ERROR', 'Failed to load transactions: ' + loadErr.message, 0);
+    btn.disabled  = false;
+    btn.innerHTML = '🔍 Full Verify';
+    return;
+  }
+
+  // ── 2. Helpers for tearing down the worker ─────────────
+  let _worker = null;
+
+  function _terminateWorker() {
+    if (_worker) { _worker.terminate(); _worker = null; }
+  }
+
+  function _resetUI() {
+    progWrap.classList.remove('visible');
+    progFill.style.width = '0%';
+    btn.disabled  = false;
+    btn.innerHTML = '🔍 Full Verify';
+  }
+
+  // ── 3. Spawn the worker ─────────────────────────────────
+  try {
+    _worker = new Worker('chain-verify-worker.js');
+  } catch (workerErr) {
+    // Workers may be unavailable in file:// origins on some browsers.
+    // Fall back to the main-thread path so the page never breaks.
+    console.warn('[Verify] Worker spawn failed, falling back to main thread:', workerErr);
+    _resetUI();
+    const onProgress = (current, total, pct) => {
+      progLabel.textContent = `Verifying record ${current} of ${total}…`;
+      progPct.textContent   = pct + '%';
+      progFill.style.width  = pct + '%';
+    };
+    progWrap.classList.add('visible');
+    const report = await HashEngine.verifyChain(onProgress);
+    _lastReport  = report;
+    _resetUI();
+    setStatusCard(report.chainIntact, report.status, report.message, report.verificationTime);
+    document.getElementById('statVerified').textContent = report.verified;
+    document.getElementById('statTampered').textContent = report.tampered;
+    await refreshStats();
+    renderTable(_allRows);
+    return;
+  }
+
+  // ── 4. Handle worker messages ───────────────────────────
+  _worker.onmessage = async (event) => {
+    const msg = event.data;
+
+    // ── Progress tick ──────────────────────────────────
+    if (msg.type === 'progress') {
+      progLabel.textContent = `Verifying record ${msg.current} of ${msg.total}…`;
+      progPct.textContent   = msg.pct + '%';
+      progFill.style.width  = msg.pct + '%';
+      return;
+    }
+
+    // ── Worker-side error ──────────────────────────────
+    if (msg.type === 'error') {
+      _terminateWorker();
+      _resetUI();
+      setStatusCard(false, 'ERROR', 'Verification error: ' + msg.message, 0);
+      AuditLog.add('CHAIN_VERIFY_ERROR', msg.message);
+      return;
+    }
+
+    // ── Verification complete ──────────────────────────
+    if (msg.type === 'complete') {
+      _terminateWorker();
+      const report = msg.result;
+      _lastReport  = report;
+
+      _resetUI();
+      setStatusCard(report.chainIntact, report.status, report.message, report.verificationTime);
+
+      document.getElementById('statVerified').textContent = report.verified;
+      document.getElementById('statTampered').textContent = report.tampered;
+
+      // AuditLog.add() must run on the main thread — the worker
+      // has no access to IndexedDB or the AuditLog module.
+      AuditLog.add(
+        'CHAIN_VERIFIED',
+        `Status: ${report.status} | Total: ${report.total} | Tampered: ${report.tampered} | Time: ${report.verificationTime}ms`
+      );
+
+      await refreshStats();
+      renderTable(_allRows);
+    }
   };
 
-  const report = await HashEngine.verifyChain(onProgress);
-  _lastReport  = report;
+  // ── 5. Worker runtime error (syntax / load failure) ────
+  _worker.onerror = (err) => {
+    _terminateWorker();
+    _resetUI();
+    const detail = err.message || 'Unknown worker error';
+    console.error('[Verify] Worker onerror:', err);
+    setStatusCard(false, 'ERROR', 'Worker error: ' + detail, 0);
+    AuditLog.add('CHAIN_VERIFY_ERROR', detail);
+  };
 
-  progWrap.classList.remove('visible');
-  progFill.style.width = '0%';
-
-  setStatusCard(report.chainIntact, report.status, report.message, report.verificationTime);
-
-  document.getElementById('statVerified').textContent  = report.verified;
-  document.getElementById('statTampered').textContent  = report.tampered;
-
-  await refreshStats();
-  renderTable(_allRows);
-
-  btn.disabled  = false;
-  btn.innerHTML = '🔍 Full Verify';
+  // ── 6. Kick off the worker ──────────────────────────────
+  _worker.postMessage({ transactions, salt });
 }
 
 function setupSessionTimer() {

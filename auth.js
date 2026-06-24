@@ -317,9 +317,9 @@ const Auth = (() => {
     },
 
     async changePassword(currentPin, newPassword) {
-      // Requires PIN verification before changing password
-      const pinOk = await this.changePin(currentPin, _loadCreds()?.pinHash || '');
-      // Direct approach: verify PIN first, then update password
+      // Verify current PIN first, then update password.
+      // NOTE: do NOT call this.changePin() here — changePin() saves a new PIN
+      // hash as a side-effect and would corrupt the stored PIN credential.
       const creds = _loadCreds();
       if (!creds) return false;
 

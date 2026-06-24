@@ -838,10 +838,22 @@ async function triggerFactoryReset() {
     console.error('[Settings] Failed to write audit log for APP_CONFIG_RESET:', e);
   }
 
+  // Reset DB-backed lockout state (SEC-FIX 2).
+  // login_lockout lives in SQLite, not localStorage, so it must be cleared
+  // explicitly — otherwise a partial failed-attempt counter from before the
+  // reset would persist and eat into the attempts available on the new PIN.
+  try {
+    await Auth.clearLockout();
+  } catch (e) {
+    console.warn('[Settings] clearLockout during factory reset failed:', e.message);
+  }
+
   // Credential / session localStorage keys ONLY — never 'dems_sqlite_db'.
   localStorage.removeItem('dems_business_profile');
   localStorage.removeItem('dems_session');
   localStorage.removeItem('dems_credentials');
+  // Legacy lockout keys (pre-SEC-FIX-2) — cleared as belt-and-suspenders
+  // even though auth.js no longer writes them.
   localStorage.removeItem('failedAttempts');
   localStorage.removeItem('lockoutUntil');
 

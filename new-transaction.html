@@ -615,9 +615,21 @@ function suggestProfit() {
 
   let suggested;
   if (_txnType === 'buy') {
-    suggested = (exchRate - costRate) * amtUsdt;
-  } else {
+    // Buy = client sells USDT to us at exchange_rate.
+    // We later sell/trade USDT with our LP at cost_rate.
+    // Profit is positive when LP rate is higher than what we paid the client.
     suggested = (costRate - exchRate) * amtUsdt;
+  } else {
+    // Sell = client buys USDT from us at exchange_rate.
+    // We acquired that USDT from our LP at cost_rate.
+    // Profit is positive when we charged the client more than LP cost.
+    suggested = (exchRate - costRate) * amtUsdt;
+  }
+
+  // Guard: floating-point edge cases (Infinity, NaN) must never reach the UI
+  if (!isFinite(suggested)) {
+    suggestEl.classList.remove('show');
+    return;
   }
 
   const formatted = suggested.toFixed(2);
@@ -956,10 +968,15 @@ async function saveAndLockTransaction() {
     payment_ref     : document.getElementById('fPaymentRef').value.trim() || '',
     notes           : document.getElementById('fNotes').value.trim() || '',
     // screenshot_path is intentionally left blank here — the full base64
-    // blob is stored separately in the attachments table (see below).
-    // We set the path to 'pending' as a sentinel so receipt.html knows to
-    // look for an attachment even before we write it, then overwrite below.
-    screenshot_path : _uploadedScreenshotBase64 ? 'pending' : ''
+    // blob is stored separately in the attachments table. We set the path
+    // to 'pending' as a sentinel; HashEngine.insertTransaction() overwrites
+    // it with the real 'attachment:<id>' pointer once the attachment row
+    // is written, atomically with the transaction insert (see below).
+    screenshot_path : _uploadedScreenshotBase64 ? 'pending' : '',
+    // attachmentData carries the actual base64 image (if any) into
+    // insertTransaction so the INSERT + client sync + attachment save can
+    // all happen inside one DB.transaction() and roll back together.
+    attachmentData  : _uploadedScreenshotBase64 || ''
   };
 
   try {
@@ -967,40 +984,18 @@ async function saveAndLockTransaction() {
     
     if (response.success) {
       // ── ATTACHMENT STORAGE ──────────────────────────────────────────────
-      // Move the screenshot blob OUT of the transactions row and into the
-      // dedicated attachments table.  This keeps the main table lean so
-      // hash-chain reads, reports, and exports don't carry image payloads.
-      //
-      // screenshot_path on the transaction row is a non-hashed metadata
-      // column (not in either hash field-order), so updating it here does
-      // not break chain integrity for the record we just inserted.
-      if (_uploadedScreenshotBase64 && response.txnId) {
-        try {
-          // Detect MIME from the data-URI header (e.g. 'data:image/jpeg;base64,...')
-          const mimeMatch = _uploadedScreenshotBase64.match(/^data:([^;]+);base64,/);
-          const mimeType  = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-
-          const attId = await DB.saveAttachment(response.txnId, mimeType, _uploadedScreenshotBase64);
-
-          // Update the transaction row's screenshot_path to the pointer format
-          // and set attachment_id for fast lookups — neither column is hashed.
-          await DB.run(
-            `UPDATE transactions SET screenshot_path = ?, attachment_id = ? WHERE id = ?`,
-            [`attachment:${attId}`, attId, response.txnId]
-          );
-
-          AuditLog.add('ATTACHMENT_SAVED', `txn_id: ${response.txnId} | attachment_id: ${attId} | mime: ${mimeType}`);
-        } catch (attErr) {
-          // Non-fatal — the transaction is already committed to the chain.
-          // Log the error; the screenshot will be absent on the receipt but
-          // the financial record is intact.
-          console.error('[NewTransaction] Attachment save failed:', attErr);
-          AuditLog.add('ATTACHMENT_SAVE_FAILED', `txn_id: ${response.txnId} | error: ${attErr.message}`);
-        }
+      // The screenshot blob (if any) was already moved into the attachments
+      // table and the transaction row's screenshot_path/attachment_id were
+      // already updated — all inside the same DB.transaction() as the
+      // INSERT and client KYC sync in HashEngine.insertTransaction(), so a
+      // failed attachment write rolls back the whole block instead of
+      // leaving an orphaned transaction or screenshot-less receipt.
+      if (response.attachmentId) {
+        AuditLog.add('ATTACHMENT_SAVED', `txn_id: ${response.txnId} | attachment_id: ${response.attachmentId}`);
       }
 
       // Flush immediately before redirecting so both the transaction row and
-      // the attachment row are persisted to localStorage.  The 2-second
+      // the attachment row are persisted to localStorage. The 2-second
       // debounce window would otherwise still be open during the navigation.
       DB.flush();
 
@@ -1027,7 +1022,7 @@ async function saveAndLockTransaction() {
 
 // ── UTILITIES ────────────────────────────────────────────
 function setTxt(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
-function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;'); }
 
 function setupSession() {
   function tick() {

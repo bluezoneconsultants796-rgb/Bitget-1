@@ -806,7 +806,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 function setTxt(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
 function escHtml(s) {
   if (!s) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
 }
 function fmtPkr(n) { return '₨ ' + parseFloat(n||0).toLocaleString('en-PK'); }
 function fmtPkrShort(n) {

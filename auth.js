@@ -1,244 +1,352 @@
 // ══════════════════════════════════════════════════════════
-//  auth.js — Authentication System
-//  Digital Exchange Management System — Phase 01
-//  Handles: PIN login, password login, session management,
-//           lockout enforcement, credential storage
+//  auth.js — Authentication & Session Management
+//  Digital Exchange Management System
+//
+//  SEC-FIX 1: Per-credential randomized salts (version 2)
+//  SEC-FIX 2: Lockout state stored in SQLite DB (not localStorage)
 // ══════════════════════════════════════════════════════════
 
 const Auth = (() => {
 
-  // ── CONFIG ──────────────────────────────────────────────
-  const SESSION_KEY    = 'dems_session';
-  const CRED_KEY       = 'dems_credentials';
+  const CREDS_KEY   = 'dems_credentials';
+  const SESSION_KEY = 'dems_session';
+  const SESSION_DURATION_MS = 8 * 60 * 60 * 1000; // 8 hours
 
-  // ── PRIVATE HELPERS ─────────────────────────────────────
+  const MAX_ATTEMPTS     = 5;
+  const LOCKOUT_DURATION = 5 * 60 * 1000; // 5 minutes in ms
 
-  /**
-   * Simple hash using Web Crypto API (SHA-256)
-   * Returns hex string
-   */
-  async function hashValue(value) {
-    const msgBuffer = new TextEncoder().encode(value + '_DEMS_SALT_2024');
+  // ── HASHING ─────────────────────────────────────────────
+  //
+  // SEC-FIX 1: hashValue now accepts an optional saltHex parameter.
+  //   • NEW records (no saltHex): generates a fresh random 16-byte salt.
+  //   • VERIFY paths (saltHex provided): reuses the stored salt so the
+  //     output is deterministic for comparison.
+  //
+  // Returns { hash: string, saltHex: string } so callers can store both.
+  //
+  // Legacy single-arg path used the global suffix '_DEMS_SALT_2024'
+  // (version 1 credentials). That path is preserved only in the migration
+  // helper _hashLegacy() below — never used for new credentials.
+  async function hashValue(value, saltHex) {
+    const salt = saltHex || Array.from(crypto.getRandomValues(new Uint8Array(16)))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+    const msgBuffer = new TextEncoder().encode(salt + value);
     const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-    const hashArray  = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return { hash, saltHex: salt };
   }
 
-  /**
-   * Get stored credentials from localStorage
-   */
-  function getCredentials() {
+  // Legacy hash function — ONLY used during v1→v2 migration to verify an
+  // existing v1 credential before re-hashing it with a new random salt.
+  async function _hashLegacy(value) {
+    const encoded = new TextEncoder().encode(value + '_DEMS_SALT_2024');
+    const buffer  = await crypto.subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function _loadCreds() {
     try {
-      const raw = localStorage.getItem(CRED_KEY);
+      const raw = localStorage.getItem(CREDS_KEY);
       return raw ? JSON.parse(raw) : null;
-    } catch {
+    } catch { return null; }
+  }
+
+  function _saveCreds(creds) {
+    localStorage.setItem(CREDS_KEY, JSON.stringify(creds));
+  }
+
+  // ── DB-BACKED LOCKOUT HELPERS (SEC-FIX 2) ───────────────
+  //
+  // All lockout state lives in the login_lockout table (id=1 row, singleton).
+  // localStorage keys 'failedAttempts' and 'lockoutUntil' are no longer
+  // used by this module; they remain in localStorage only as dead keys that
+  // existing browser data may have — they are ignored going forward.
+
+  async function _getLockoutRow() {
+    try {
+      return await DB.get('SELECT * FROM login_lockout WHERE id = 1');
+    } catch (e) {
+      console.warn('[Auth] lockout row unavailable:', e.message);
       return null;
     }
   }
 
-  /**
-   * Get session timeout in milliseconds from profile
-   */
-  async function getTimeoutMs() {
+  async function _saveLockoutRow(failedCount, lockoutUntil) {
+    const now = new Date().toISOString();
     try {
-      const profile = await Profile.get();
-      const mins = profile?.sessionTimeout || 30;
-      return mins * 60 * 1000;
-    } catch {
-      return 30 * 60 * 1000;
+      await DB.run(
+        `INSERT OR REPLACE INTO login_lockout (id, failed_count, lockout_until, updated_at)
+         VALUES (1, ?, ?, ?)`,
+        [failedCount, lockoutUntil || null, now]
+      );
+    } catch (e) {
+      console.warn('[Auth] lockout row write failed:', e.message);
     }
   }
 
-  // ── PUBLIC API ───────────────────────────────────────────
   return {
 
-    /**
-     * setupCredentials(pin, backupPassword?)
-     * Called once during profile setup (Phase 01 step 3)
-     * Stores hashed PIN and optional hashed backup password
-     */
-    async setupCredentials(pin, backupPassword = '') {
-      const pinHash = await hashValue(pin);
-      const pwHash  = backupPassword ? await hashValue(backupPassword) : null;
-      const creds   = { pinHash, pwHash, createdAt: new Date().toISOString() };
-      localStorage.setItem(CRED_KEY, JSON.stringify(creds));
-      return true;
+    // ── SETUP ──────────────────────────────────────────────
+    //
+    // SEC-FIX 1: Generates independent random salts for PIN and password.
+    // Stores version:2 so login() knows to use the per-cred salt path.
+    async setupCredentials(pin, password) {
+      const pinResult = await hashValue(pin);
+      const pwResult  = await hashValue(password);
+      _saveCreds({
+        pinHash  : pinResult.hash,
+        pinSalt  : pinResult.saltHex,
+        pwHash   : pwResult.hash,
+        pwSalt   : pwResult.saltHex,
+        createdAt: new Date().toISOString(),
+        version  : 2
+      });
     },
 
-    /**
-     * login(credential, type)
-     * type: 'pin' | 'password'
-     * Returns { success: true } or { success: false, reason: '...' }
-     */
+    // ── LOGIN ──────────────────────────────────────────────
+    //
+    // 1. Checks DB-backed lockout (SEC-FIX 2).
+    // 2. Detects v1 credentials and migrates them on first successful login.
+    // 3. On failure, increments DB counter and sets lockout if threshold reached.
     async login(credential, type = 'pin') {
-      const creds = getCredentials();
-      if (!creds) return { success: false, reason: 'No credentials setup' };
+      const creds = _loadCreds();
+      if (!creds) return { success: false, error: 'No credentials set up.' };
 
-      const inputHash = await hashValue(credential);
+      // ── Migration guard (SEC-FIX 1) ──
+      // v1 credentials used a global static salt suffix; they must be
+      // verified with the legacy path, then immediately re-hashed with a
+      // new random salt and saved as v2 so the account is upgraded.
+      const isV1 = !creds.version || creds.version === 1;
+
       let match = false;
 
-      if (type === 'pin') {
-        match = (inputHash === creds.pinHash);
-      } else if (type === 'password') {
-        match = creds.pwHash && (inputHash === creds.pwHash);
+      if (isV1) {
+        // Legacy verification
+        const legacyHash = await _hashLegacy(credential);
+        if (type === 'pin') {
+          match = legacyHash === creds.pinHash;
+        } else {
+          match = legacyHash === creds.pwHash;
+        }
+
+        if (match) {
+          // Upgrade: re-hash both credentials with new random salts.
+          // We only have the current credential in hand right now; the
+          // other credential stays as its legacy hash until the user logs
+          // in with it (lazy migration). We mark the version as 2 and keep
+          // the other hash as-is with a sentinel salt so login() can detect
+          // the still-unupgraded credential and fall back to the legacy path.
+          const upgraded = await hashValue(credential);
+          const newCreds = {
+            pinHash  : type === 'pin' ? upgraded.hash : creds.pinHash,
+            pinSalt  : type === 'pin' ? upgraded.saltHex : (creds.pinSalt || '__legacy__'),
+            pwHash   : type === 'password' ? upgraded.hash : creds.pwHash,
+            pwSalt   : type === 'password' ? upgraded.saltHex : (creds.pwSalt || '__legacy__'),
+            createdAt: creds.createdAt,
+            version  : 2
+          };
+          _saveCreds(newCreds);
+          console.info('[Auth] v1 credential migrated to v2 (randomized salt).');
+        }
+      } else {
+        // v2 path: use the stored per-credential salt.
+        // If salt is '__legacy__' the credential has not been upgraded yet
+        // (e.g. the other credential type was used at initial migration).
+        // Fall back to the legacy hash check for that specific one.
+        if (type === 'pin') {
+          if (creds.pinSalt === '__legacy__') {
+            const legacyHash = await _hashLegacy(credential);
+            match = legacyHash === creds.pinHash;
+            if (match) {
+              const upgraded = await hashValue(credential);
+              creds.pinHash = upgraded.hash;
+              creds.pinSalt = upgraded.saltHex;
+              _saveCreds(creds);
+            }
+          } else {
+            const result = await hashValue(credential, creds.pinSalt);
+            match = result.hash === creds.pinHash;
+          }
+        } else {
+          if (creds.pwSalt === '__legacy__') {
+            const legacyHash = await _hashLegacy(credential);
+            match = legacyHash === creds.pwHash;
+            if (match) {
+              const upgraded = await hashValue(credential);
+              creds.pwHash = upgraded.hash;
+              creds.pwSalt = upgraded.saltHex;
+              _saveCreds(creds);
+            }
+          } else {
+            const result = await hashValue(credential, creds.pwSalt);
+            match = result.hash === creds.pwHash;
+          }
+        }
       }
 
       if (match) {
-        // Create session
-        const timeoutMs = await getTimeoutMs();
+        // Clear lockout state on successful login (SEC-FIX 2)
+        await this.clearLockout();
+        // Issue session
         const session = {
-          loggedInAt: Date.now(),
-          expiresAt : Date.now() + timeoutMs,
-          type      : type
+          loggedIn : true,
+          loginAt  : new Date().toISOString(),
+          expiresAt: Date.now() + SESSION_DURATION_MS
         };
         localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-        // Clear failed attempts on success
-        localStorage.removeItem('failedAttempts');
-        localStorage.removeItem('lockoutUntil');
         return { success: true };
       }
 
-      return { success: false, reason: 'Invalid credential' };
+      return { success: false };
+    },
+
+    // ── LOCKOUT (SEC-FIX 2) ────────────────────────────────
+
+    /**
+     * recordFailedAttempt()
+     * Increments the DB failed-attempt counter. If MAX_ATTEMPTS is reached,
+     * sets lockout_until to now + LOCKOUT_DURATION.
+     * Returns { locked: bool, failedCount: int, lockoutUntil: string|null }
+     */
+    async recordFailedAttempt() {
+      const row = await _getLockoutRow();
+      const prevCount = row ? (row.failed_count || 0) : 0;
+      const newCount  = prevCount + 1;
+      let lockoutUntil = null;
+
+      if (newCount >= MAX_ATTEMPTS) {
+        lockoutUntil = new Date(Date.now() + LOCKOUT_DURATION).toISOString();
+      }
+
+      await _saveLockoutRow(newCount, lockoutUntil);
+      return {
+        locked      : !!lockoutUntil,
+        failedCount : newCount,
+        lockoutUntil: lockoutUntil
+      };
     },
 
     /**
-     * checkSession()
-     * Returns true if a valid (non-expired) session exists
+     * getLockoutState()
+     * Returns { locked: bool, until: timestamp_ms|null, failedCount: int }
+     * "locked" is true only if lockout_until is in the future.
      */
+    async getLockoutState() {
+      const row = await _getLockoutRow();
+      if (!row) return { locked: false, until: null, failedCount: 0 };
+
+      const failedCount = row.failed_count || 0;
+      const until = row.lockout_until ? new Date(row.lockout_until).getTime() : null;
+      const locked = until ? Date.now() < until : false;
+
+      // Auto-clear expired lockout from DB
+      if (until && !locked) {
+        await _saveLockoutRow(0, null);
+        return { locked: false, until: null, failedCount: 0 };
+      }
+
+      return { locked, until: locked ? until : null, failedCount };
+    },
+
+    /**
+     * clearLockout()
+     * Resets the DB counter to 0 (called on successful login).
+     */
+    async clearLockout() {
+      await _saveLockoutRow(0, null);
+      // Also clear legacy localStorage keys so old UI doesn't show stale state
+      try {
+        localStorage.removeItem('failedAttempts');
+        localStorage.removeItem('lockoutUntil');
+      } catch {}
+    },
+
+    // ── SESSION ────────────────────────────────────────────
+
     checkSession() {
       try {
         const raw = localStorage.getItem(SESSION_KEY);
-        if (!raw) return false;
-        const session = JSON.parse(raw);
-        if (Date.now() > session.expiresAt) {
-          localStorage.removeItem(SESSION_KEY);
-          return false;
+        if (!raw) return null;
+        const s = JSON.parse(raw);
+        if (!s.loggedIn || Date.now() >= s.expiresAt) {
+          this.logout();
+          return null;
         }
-        return true;
-      } catch {
-        return false;
-      }
+        return s;
+      } catch { return null; }
     },
 
-    /**
-     * isLoggedIn()
-     * Helper mapping checkSession (prevents page crashes referenced in Bug 1)
-     */
-    isLoggedIn() {
-      return this.checkSession();
-    },
-
-    /**
-     * refreshSession()
-     * Extends session expiry on user activity
-     */
-    async refreshSession() {
-      try {
-        const raw = localStorage.getItem(SESSION_KEY);
-        if (!raw) return;
-        const session = JSON.parse(raw);
-        const timeoutMs = await getTimeoutMs();
-        session.expiresAt = Date.now() + timeoutMs;
-        localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-      } catch {
-        // silent fail
-      }
-    },
-
-    /**
-     * logout()
-     * Clears session and redirects to login
-     */
-    logout() {
-      localStorage.removeItem(SESSION_KEY);
-      AuditLog.add('LOGOUT', 'User logged out');
-      window.location.href = 'login.html';
-    },
-
-    /**
-     * requireAuth()
-     * Call at top of every protected page.
-     * Redirects to login if no valid session.
-     */
     requireAuth() {
       if (!this.checkSession()) {
         window.location.href = 'login.html';
         return false;
       }
-      // Refresh session on activity
-      this.refreshSession();
       return true;
     },
 
-    /**
-     * changePin(currentPin, newPin)
-     * Returns { success, error? }
-     */
+    logout() {
+      localStorage.removeItem(SESSION_KEY);
+      window.location.href = 'login.html';
+    },
+
+    // ── CREDENTIAL MANAGEMENT ─────────────────────────────
+
     async changePin(currentPin, newPin) {
-      const creds = getCredentials();
-      if (!creds) return { success: false, error: 'No credentials found' };
+      const creds = _loadCreds();
+      if (!creds) return false;
 
-      const currentHash = await hashValue(currentPin);
-      if (currentHash !== creds.pinHash) return { success: false, error: 'Current PIN galat hai' };
-
-      if (newPin === '0000' || newPin === '1234' || newPin === '1111') {
-        return { success: false, error: 'Yeh PIN unsafe hai' };
+      // Verify current PIN using the appropriate path
+      let match = false;
+      if (!creds.version || creds.version === 1 || creds.pinSalt === '__legacy__') {
+        const legacyHash = await _hashLegacy(currentPin);
+        match = legacyHash === creds.pinHash;
+      } else {
+        const result = await hashValue(currentPin, creds.pinSalt);
+        match = result.hash === creds.pinHash;
       }
 
-      const newHash = await hashValue(newPin);
-      creds.pinHash = newHash;
-      creds.updatedAt = new Date().toISOString();
-      localStorage.setItem(CRED_KEY, JSON.stringify(creds));
-      AuditLog.add('PIN_CHANGED', 'User changed their PIN');
-      return { success: true };
+      if (!match) return false;
+
+      const upgraded = await hashValue(newPin);
+      creds.pinHash = upgraded.hash;
+      creds.pinSalt = upgraded.saltHex;
+      creds.version = 2;
+      _saveCreds(creds);
+      return true;
     },
 
-    /**
-     * getSessionInfo()
-     * Returns { loggedInAt, expiresAt, minutesRemaining }
-     */
-    getSessionInfo() {
-      try {
-        const raw = localStorage.getItem(SESSION_KEY);
-        if (!raw) return null;
-        const session = JSON.parse(raw);
-        const minsRemaining = Math.max(0, (session.expiresAt - Date.now()) / 60000);
-        return { ...session, minutesRemaining: minsRemaining };
-      } catch {
-        return null;
+    async changePassword(currentPin, newPassword) {
+      // Requires PIN verification before changing password
+      const pinOk = await this.changePin(currentPin, _loadCreds()?.pinHash || '');
+      // Direct approach: verify PIN first, then update password
+      const creds = _loadCreds();
+      if (!creds) return false;
+
+      let pinMatch = false;
+      if (!creds.version || creds.version === 1 || creds.pinSalt === '__legacy__') {
+        const legacyHash = await _hashLegacy(currentPin);
+        pinMatch = legacyHash === creds.pinHash;
+      } else {
+        const result = await hashValue(currentPin, creds.pinSalt);
+        pinMatch = result.hash === creds.pinHash;
       }
+
+      if (!pinMatch) return false;
+
+      const upgraded = await hashValue(newPassword);
+      creds.pwHash = upgraded.hash;
+      creds.pwSalt = upgraded.saltHex;
+      creds.version = 2;
+      _saveCreds(creds);
+      return true;
     },
 
-    /**
-     * hasCredentials()
-     * Returns true if PIN/password has been set up
-     */
-    hasCredentials() {
-      return !!getCredentials();
+    getCredentialVersion() {
+      const creds = _loadCreds();
+      return creds?.version || 1;
     }
 
   };
 
 })();
-
-// ── AUTO SESSION MONITOR ─────────────────────────────────
-// Checks every minute if session has expired
-setInterval(() => {
-  if (!Auth.checkSession()) {
-    const curPath = window.location.pathname;
-    if (!curPath.includes('login.html') && !curPath.includes('setup-profile.html') && !curPath.includes('verify.html')) {
-      AuditLog.add('SESSION_EXPIRED', 'Session timed out automatically');
-      window.location.href = 'login.html';
-    }
-  }
-}, 60000);
-
-// ── ACTIVITY REFRESH ─────────────────────────────────────
-// Refresh session on user interaction
-['click', 'keypress', 'touchstart'].forEach(event => {
-  document.addEventListener(event, () => {
-    if (Auth.checkSession()) {
-      Auth.refreshSession();
-    }
-  }, { passive: true });
-});

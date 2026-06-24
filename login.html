@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self';
+           script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com;
+           style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com;
+           font-src https://fonts.gstatic.com;
+           connect-src 'self' https://worldtimeapi.org;
+           img-src 'self' data: blob:;
+           object-src 'none';
+           base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Login — Digital Exchange MS</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -268,8 +277,6 @@
 <script src="audit-log.js"></script>
 <script>
   let pin = '';
-  const MAX_ATTEMPTS = 5;
-  const LOCKOUT_MINUTES = 5;
 
   window.addEventListener('DOMContentLoaded', async () => {
     await DB.init();
@@ -279,17 +286,15 @@
       document.getElementById('biz-secp').textContent = profile.secpNumber ? 'SECP: ' + profile.secpNumber : '';
       if (profile.logoEmoji) document.getElementById('biz-logo').textContent = profile.logoEmoji;
     }
-    checkLockout();
+    await checkLockout();
   });
 
-  function checkLockout() {
-    const lockoutUntil = parseInt(localStorage.getItem('lockoutUntil') || '0');
-    const now = Date.now();
-    if (lockoutUntil > now) {
-      showLockout(lockoutUntil - now);
+  async function checkLockout() {
+    const state = await Auth.getLockoutState();
+    if (state.locked) {
+      showLockout(state.until - Date.now());
     } else {
-      localStorage.removeItem('lockoutUntil');
-      updateAttemptsBar();
+      updateAttemptsBar(state.failedCount);
     }
   }
 
@@ -297,27 +302,26 @@
     document.getElementById('login-view').style.display = 'none';
     document.getElementById('password-view').style.display = 'none';
     document.getElementById('lockout-view').style.display = 'block';
-    const interval = setInterval(() => {
-      msRemaining -= 1000;
+    const tick = () => {
       if (msRemaining <= 0) {
-        clearInterval(interval);
-        localStorage.removeItem('lockoutUntil');
-        localStorage.removeItem('failedAttempts');
-        location.reload();
+        Auth.clearLockout().then(() => location.reload());
         return;
       }
       const mins = Math.floor(msRemaining / 60000);
       const secs = Math.floor((msRemaining % 60000) / 1000);
       document.getElementById('lockout-timer').textContent =
         String(mins).padStart(2,'0') + ':' + String(secs).padStart(2,'0');
-    }, 1000);
+      msRemaining -= 1000;
+      setTimeout(tick, 1000);
+    };
+    tick();
   }
 
-  function updateAttemptsBar() {
-    const attempts = parseInt(localStorage.getItem('failedAttempts') || '0');
-    const remaining = MAX_ATTEMPTS - attempts;
+  function updateAttemptsBar(failedCount = 0) {
+    const MAX_ATTEMPTS = 5;
+    const remaining = MAX_ATTEMPTS - failedCount;
     const bar = document.getElementById('attempts-bar');
-    if (attempts > 0) {
+    if (failedCount > 0) {
       bar.innerHTML = `Remaining attempts: <span>${remaining}</span> / ${MAX_ATTEMPTS}`;
     } else {
       bar.innerHTML = '';
@@ -359,22 +363,28 @@
   }
 
   async function attemptLogin(credential, type) {
+    // Check lockout before attempting
+    const lockState = await Auth.getLockoutState();
+    if (lockState.locked) {
+      showLockout(lockState.until - Date.now());
+      return;
+    }
+
     const result = await Auth.login(credential, type);
     if (result.success) {
       AuditLog.add('LOGIN_SUCCESS', 'User logged in via ' + type);
       window.location.href = 'dashboard.html';
     } else {
-      let attempts = parseInt(localStorage.getItem('failedAttempts') || '0') + 1;
-      localStorage.setItem('failedAttempts', attempts);
-      AuditLog.add('LOGIN_FAILED', 'Failed attempt #' + attempts + ' via ' + type);
-      if (attempts >= MAX_ATTEMPTS) {
-        const lockUntil = Date.now() + LOCKOUT_MINUTES * 60 * 1000;
-        localStorage.setItem('lockoutUntil', lockUntil);
-        showLockout(LOCKOUT_MINUTES * 60 * 1000);
+      const state = await Auth.recordFailedAttempt();
+      AuditLog.add('LOGIN_FAILED', 'Failed attempt #' + state.failedCount + ' via ' + type);
+      if (state.locked) {
+        showLockout(new Date(state.lockoutUntil).getTime() - Date.now());
       } else {
+        const MAX_ATTEMPTS = 5;
+        const remaining = MAX_ATTEMPTS - state.failedCount;
         const errId = type === 'pin' ? 'login-error' : 'pw-error';
-        showError(errId, 'Galat ' + (type === 'pin' ? 'PIN' : 'password') + ' — ' + (MAX_ATTEMPTS - attempts) + ' attempts bachi hain');
-        updateAttemptsBar();
+        showError(errId, 'Galat ' + (type === 'pin' ? 'PIN' : 'password') + ' — ' + remaining + ' attempts bachi hain');
+        updateAttemptsBar(state.failedCount);
       }
     }
   }

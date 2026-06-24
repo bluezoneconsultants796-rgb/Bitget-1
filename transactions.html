@@ -594,7 +594,7 @@ function exportLedgerCsv() {
 
 // ── UTILITIES ─────────────────────────────────────────────
 function setTxt(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
-function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;'); }
 
 // Profit display: NULL/blank shows as "—" rather than 0, since a missing
 // profit figure is not the same as a confirmed zero-profit transaction.

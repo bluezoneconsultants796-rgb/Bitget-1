@@ -5,10 +5,33 @@
 
 const HashEngine = (() => {
 
-  const HASH_VERSION   = 'DEMS-v2';   // current version — includes cost_rate & profit_pkr
-  const HASH_VERSION_V1 = 'DEMS-v1'; // legacy version — for verifying pre-profit records
-  const GENESIS_HASH   = '0'.repeat(64);
-  const SALT           = 'DEMS_CHAIN_SALT_2024';
+  const HASH_VERSION    = 'DEMS-v2';   // current version — includes cost_rate & profit_pkr
+  const HASH_VERSION_V1 = 'DEMS-v1';  // legacy version — for verifying pre-profit records
+  const GENESIS_HASH    = '0'.repeat(64);
+
+  // ── SEC-FIX 6: Per-install chain salt ───────────────────
+  //
+  // SALT is now loaded from app_settings('chain_salt') at runtime.
+  // SALT_LEGACY is the old hardcoded value — used ONLY when no
+  // chain_salt exists in the DB (i.e. pre-migration installs).
+  const SALT_LEGACY = 'DEMS_CHAIN_SALT_2024';
+
+  let _chainSalt = null;  // cached after first DB read
+
+  async function _loadChainSalt() {
+    if (_chainSalt !== null) return _chainSalt;
+    try {
+      const row = await DB.get(`SELECT value FROM app_settings WHERE key = 'chain_salt'`);
+      _chainSalt = (row && row.value) ? row.value : SALT_LEGACY;
+    } catch {
+      _chainSalt = SALT_LEGACY;
+    }
+    return _chainSalt;
+  }
+
+  async function _getSalt() { return _loadChainSalt(); }
+
+  function _invalidateSaltCache() { _chainSalt = null; }
 
   async function sha256(input) {
     const encoded = new TextEncoder().encode(input);
@@ -33,7 +56,7 @@ const HashEngine = (() => {
   // Call buildHashPayloadForRecord() when verifying an existing record
   // — it picks v1 or v2 based on the HASH_VERSION stored in the row.
   //
-  function buildHashPayloadV1(record, prevHash) {
+  function buildHashPayloadV1(record, prevHash, salt) {
     const fields = [
       HASH_VERSION_V1,
       record.receipt_number  || '',
@@ -50,12 +73,12 @@ const HashEngine = (() => {
       record.timestamp,
       String(record.chain_index),
       prevHash,
-      SALT
+      salt || SALT_LEGACY
     ];
     return fields.join('|');
   }
 
-  function buildHashPayloadV2(record, prevHash) {
+  function buildHashPayloadV2(record, prevHash, salt) {
     const fields = [
       HASH_VERSION,
       record.receipt_number  || '',
@@ -75,7 +98,7 @@ const HashEngine = (() => {
       record.timestamp,
       String(record.chain_index),
       prevHash,
-      SALT
+      salt || SALT_LEGACY
     ];
     return fields.join('|');
   }
@@ -84,18 +107,18 @@ const HashEngine = (() => {
   // stamped on the record itself — so old rows always verify under v1
   // and new rows always verify under v2, regardless of the current
   // HASH_VERSION constant above.
-  function buildHashPayloadForRecord(record, prevHash) {
+  function buildHashPayloadForRecord(record, prevHash, salt) {
     const ver = (record.hash_version || '').trim();
     if (ver === HASH_VERSION_V1 || ver === 'DEMS-v1') {
-      return buildHashPayloadV1(record, prevHash);
+      return buildHashPayloadV1(record, prevHash, salt);
     }
     // Default to v2 for new records and any future versions.
-    return buildHashPayloadV2(record, prevHash);
+    return buildHashPayloadV2(record, prevHash, salt);
   }
 
   // Convenience alias used by new-record paths (always v2 going forward).
-  function buildHashPayload(record, prevHash) {
-    return buildHashPayloadV2(record, prevHash);
+  function buildHashPayload(record, prevHash, salt) {
+    return buildHashPayloadV2(record, prevHash, salt);
   }
 
   function getDeviceTimestamp() {
@@ -215,6 +238,43 @@ const HashEngine = (() => {
     }
   }
 
+  /**
+   * subtractClientVolume(original)
+   *
+   * Called when a transaction is voided. Reverses the client KYC stat bump
+   * that syncClientForTransaction() applied when the original transaction
+   * was first inserted — decrementing total_txns and total_volume_pkr by
+   * exactly the original transaction's contribution. Void entries must
+   * NEVER be passed through syncClientForTransaction() themselves (that
+   * would add the void as a brand-new transaction and double-count the
+   * client's volume); this function is the correct counterpart for voids.
+   * Floors at zero so a client record can never go negative even if stats
+   * were already out of sync.
+   */
+  async function subtractClientVolume(original) {
+    if (!original.client_name && !original.client_cnic) return;
+
+    const cnic = (original.client_cnic || '').trim();
+    const name = (original.client_name || '').trim();
+    const amount = parseFloat(original.amount_pkr) || 0;
+
+    let client = null;
+    if (cnic) {
+      client = await DB.get('SELECT * FROM clients WHERE cnic = ?', [cnic]);
+    } else if (name) {
+      client = await DB.get("SELECT * FROM clients WHERE full_name = ? AND cnic IS NULL", [name]);
+    }
+
+    if (client) {
+      const newTxns = Math.max(0, (client.total_txns || 0) - 1);
+      const newVol  = Math.max(0, (client.total_volume_pkr || 0) - amount);
+      await DB.run(
+        'UPDATE clients SET total_txns = ?, total_volume_pkr = ?, updated_at = ? WHERE id = ?',
+        [newTxns, newVol, new Date().toISOString(), client.id]
+      );
+    }
+  }
+
   return {
 
     /**
@@ -239,11 +299,42 @@ const HashEngine = (() => {
       // It stays 0 only when the check ran AND found the clock to be fine.
       const clockUnverified = (!clockCheck || !clockCheck.checked || !clockCheck.drift_ok) ? 1 : 0;
 
-      // cost_rate and profit_pkr are optional — null when not supplied.
-      // parseFloat('') returns NaN; we store null in that case so the DB
-      // column is NULL (not 0, which would be a valid — if unusual — rate).
+      // ── cost_rate & profit_pkr (optional profit-tracking fields) ────────
+      // parseFloat('') → NaN; we store null in that case so the DB column
+      // stays NULL (not 0, which is a valid — if unusual — break-even value).
+      //
+      // Auto-calculation of profit_pkr:
+      //   When the user supplied a cost_rate but left profit_pkr blank the
+      //   engine calculates it here so the stored value is always consistent
+      //   with what the UI suggestion shows, even if the user dismissed it.
+      //
+      //   Formula (mirrors suggestProfit() in new-transaction.html):
+      //     buy  (client sells USDT to us):   profit = (cost_rate − exchange_rate) × amount_usdt
+      //     sell (client buys USDT from us):  profit = (exchange_rate − cost_rate) × amount_usdt
+      //
+      //   Result is rounded to 2 decimal places and guarded against
+      //   Infinity / NaN before storage — a bad float never reaches the DB.
       const costRateRaw  = parseFloat(formData.cost_rate);
       const profitPkrRaw = parseFloat(formData.profit_pkr);
+
+      const costRate  = isNaN(costRateRaw)  ? null : costRateRaw;
+      let   profitPkr = isNaN(profitPkrRaw) ? null : profitPkrRaw;
+
+      if (profitPkr === null && costRate !== null) {
+        // Only auto-calculate when we have enough data
+        const exchRate = parseFloat(formData.exchange_rate) || 0;
+        const amtUsdt  = parseFloat(formData.amount_usdt)   || 0;
+
+        if (exchRate > 0 && amtUsdt > 0) {
+          const raw = formData.txn_type === 'buy'
+            ? (costRate - exchRate) * amtUsdt   // buy: profit when LP rate > rate paid to client
+            : (exchRate - costRate) * amtUsdt;  // sell: profit when rate charged to client > LP rate
+
+          // Round to 2dp to avoid floating-point noise; guard Infinity/NaN
+          const rounded = Math.round(raw * 100) / 100;
+          profitPkr = isFinite(rounded) ? rounded : null;
+        }
+      }
 
       const record = {
         receipt_number  : receiptNumber,
@@ -252,8 +343,8 @@ const HashEngine = (() => {
         amount_pkr      : parseFloat(formData.amount_pkr)      || 0,
         exchange_rate   : parseFloat(formData.exchange_rate)   || 0,
         amount_usdt     : parseFloat(formData.amount_usdt)     || 0,
-        cost_rate       : isNaN(costRateRaw)  ? null : costRateRaw,
-        profit_pkr      : isNaN(profitPkrRaw) ? null : profitPkrRaw,
+        cost_rate       : costRate,
+        profit_pkr      : profitPkr,
         client_name     : (formData.client_name     || '').trim(),
         client_cnic     : (formData.client_cnic     || '').trim(),
         bank_name       : (formData.bank_name       || '').trim(),
@@ -269,7 +360,7 @@ const HashEngine = (() => {
         hash_version    : HASH_VERSION   // stamped on the record for verifyRecord() to pick correctly
       };
 
-      const payload     = buildHashPayload(record, prevHash);  // always v2 for new records
+      const payload     = buildHashPayload(record, prevHash, await _getSalt());  // always v2 for new records
       record.hash       = await sha256(payload);
 
       return record;
@@ -283,42 +374,69 @@ const HashEngine = (() => {
         }
 
         const record = await this.prepareRecord(formData, clockCheck);
+        let attachmentId = null;
 
-        await DB.run(
-          `INSERT INTO transactions (
-            receipt_number, order_id, txn_type,
-            amount_pkr, exchange_rate, amount_usdt,
-            cost_rate, profit_pkr,
-            client_name, client_cnic,
-            bank_name, bank_last4, payment_ref,
-            notes, screenshot_path,
-            timestamp, hash, prev_hash, chain_index, is_locked, clock_unverified,
-            hash_version
-          ) VALUES (
-            ?, ?, ?,
-            ?, ?, ?,
-            ?, ?,
-            ?, ?,
-            ?, ?, ?,
-            ?, ?,
-            ?, ?, ?, ?, ?, ?,
-            ?
-          )`,
-          [
-            record.receipt_number,  record.order_id,      record.txn_type,
-            record.amount_pkr,      record.exchange_rate,  record.amount_usdt,
-            record.cost_rate,       record.profit_pkr,
-            record.client_name,     record.client_cnic,
-            record.bank_name,       record.bank_last4,    record.payment_ref,
-            record.notes,           record.screenshot_path,
-            record.timestamp,       record.hash,          record.prev_hash,
-            record.chain_index,     record.is_locked,      record.clock_unverified,
-            record.hash_version
-          ]
-        );
+        // ── ATOMIC WRITE ──────────────────────────────────────────────────
+        // INSERT the transaction row, sync the client KYC stats, and (if a
+        // screenshot was uploaded) save the attachment — all inside one
+        // SQLite BEGIN/COMMIT via DB.transaction(). If any step throws, the
+        // whole block rolls back so we never end up with a chained
+        // transaction that has no matching client stats, or a client stat
+        // bump with no transaction row behind it.
+        await DB.transaction(async () => {
+          const insertResult = await DB.run(
+            `INSERT INTO transactions (
+              receipt_number, order_id, txn_type,
+              amount_pkr, exchange_rate, amount_usdt,
+              cost_rate, profit_pkr,
+              client_name, client_cnic,
+              bank_name, bank_last4, payment_ref,
+              notes, screenshot_path,
+              timestamp, hash, prev_hash, chain_index, is_locked, clock_unverified,
+              hash_version
+            ) VALUES (
+              ?, ?, ?,
+              ?, ?, ?,
+              ?, ?,
+              ?, ?,
+              ?, ?, ?,
+              ?, ?,
+              ?, ?, ?, ?, ?, ?,
+              ?
+            )`,
+            [
+              record.receipt_number,  record.order_id,      record.txn_type,
+              record.amount_pkr,      record.exchange_rate,  record.amount_usdt,
+              record.cost_rate,       record.profit_pkr,
+              record.client_name,     record.client_cnic,
+              record.bank_name,       record.bank_last4,    record.payment_ref,
+              record.notes,           record.screenshot_path,
+              record.timestamp,       record.hash,          record.prev_hash,
+              record.chain_index,     record.is_locked,      record.clock_unverified,
+              record.hash_version
+            ]
+          );
 
-        // Auto-synchronize client KYC record representing transaction data
-        await this.syncClientForTransaction(record);
+          record.id = insertResult.lastInsertRowid;
+
+          // Auto-synchronize client KYC record representing transaction data
+          await this.syncClientForTransaction(record);
+
+          // Persist the screenshot blob (if any) into the attachments table
+          // and point screenshot_path/attachment_id at it — same atomic
+          // unit as the insert + client sync above.
+          if (formData.attachmentData && record.id) {
+            const mimeMatch = formData.attachmentData.match(/^data:([^;]+);base64,/);
+            const mimeType  = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+            attachmentId = await DB.saveAttachment(record.id, mimeType, formData.attachmentData);
+            await DB.run(
+              `UPDATE transactions SET screenshot_path = ?, attachment_id = ? WHERE id = ?`,
+              [`attachment:${attachmentId}`, attachmentId, record.id]
+            );
+            record.screenshot_path = `attachment:${attachmentId}`;
+            record.attachment_id   = attachmentId;
+          }
+        });
 
         AuditLog.add(
           'TRANSACTION_ADDED',
@@ -329,7 +447,9 @@ const HashEngine = (() => {
         return {
           success       : true,
           record        : record,
-          receiptNumber : record.receipt_number
+          receiptNumber : record.receipt_number,
+          txnId         : record.id,
+          attachmentId  : attachmentId
         };
 
       } catch (e) {
@@ -406,7 +526,8 @@ const HashEngine = (() => {
     async verifyRecord(txn) {
       // Use the version-aware builder — v1 records verify under the v1
       // field order; v2 (and future) records use their own order.
-      const payload      = buildHashPayloadForRecord(txn, txn.prev_hash);
+      const salt         = await _getSalt();
+      const payload      = buildHashPayloadForRecord(txn, txn.prev_hash, salt);
       const computedHash = await sha256(payload);
       const valid        = computedHash === txn.hash;
 
@@ -735,6 +856,31 @@ const HashEngine = (() => {
       if (!rate || rate <= 0) {
         return { valid: false, error: 'Exchange rate must be a positive number.' };
       }
+
+      // ── Optional profit-tracking fields ─────────────────────────────────
+      // cost_rate: must be a positive finite number when provided.
+      //   A rate of zero makes no financial sense; negative rates are invalid.
+      const costRateRaw = formData.cost_rate;
+      if (costRateRaw !== '' && costRateRaw != null) {
+        const costRate = parseFloat(costRateRaw);
+        if (isNaN(costRate) || !isFinite(costRate)) {
+          return { valid: false, error: 'Cost / Market Rate must be a valid number when provided.' };
+        }
+        if (costRate <= 0) {
+          return { valid: false, error: 'Cost / Market Rate must be greater than zero when provided.' };
+        }
+      }
+
+      // profit_pkr: any finite number is valid — negative values represent
+      // a confirmed loss and must not be rejected by validation.
+      const profitPkrRaw = formData.profit_pkr;
+      if (profitPkrRaw !== '' && profitPkrRaw != null) {
+        const profitPkr = parseFloat(profitPkrRaw);
+        if (isNaN(profitPkr) || !isFinite(profitPkr)) {
+          return { valid: false, error: 'Profit / Loss (PKR) must be a valid number when provided.' };
+        }
+      }
+
       return { valid: true };
     },
 
@@ -849,7 +995,7 @@ const HashEngine = (() => {
           anchor.tip_hash,
           anchor.tip_receipt || '',
           String(anchor.record_count),
-          SALT
+          await _getSalt()
         ].join('|');
         anchor.anchor_signature = await sha256(anchorPayload);
 
@@ -891,7 +1037,7 @@ const HashEngine = (() => {
         anchor.tip_hash,
         anchor.tip_receipt || '',
         String(anchor.record_count),
-        SALT
+        await _getSalt()
       ].join('|');
       const expected = await sha256(payload);
       return expected === anchor.anchor_signature;
@@ -1084,7 +1230,7 @@ const HashEngine = (() => {
         // order. They are stored as metadata columns alongside the hash, not
         // inside the signed payload — which is exactly how is_locked and
         // clock_unverified are also handled.
-        const payload = buildHashPayload(record, prevHash);
+        const payload = buildHashPayload(record, prevHash, await _getSalt());
         record.hash   = await sha256(payload);
 
         // ── 5. Insert — no UPDATE or DELETE on transactions, ever ──────
@@ -1127,6 +1273,13 @@ const HashEngine = (() => {
           `Voids: Block #${originalChainIndex} (${original.receipt_number}) | ` +
           `Reason: ${(voidReason || '').trim().substring(0, 120)}`
         );
+
+        // Reverse the original transaction's contribution to the client's
+        // KYC stats. The void entry itself must never be passed through
+        // syncClientForTransaction() — that would record it as a new
+        // transaction and double-count the client's volume instead of
+        // correcting it.
+        await subtractClientVolume(original);
 
         return {
           success       : true,
@@ -1177,7 +1330,11 @@ const HashEngine = (() => {
         console.error('[HashEngine] getVoidInfo error:', e);
         return { voided: false };
       }
-    }
+    },
+
+    // SEC-FIX 6: Called by setup-profile after writing a new chain_salt
+    // so the cached value is refreshed on first use post-setup.
+    invalidateSaltCache() { _invalidateSaltCache(); }
 
   };
 

@@ -413,7 +413,7 @@ function exportAuditAsCsv() {
 
 // ── UTILITIES ─────────────────────────────────────────────
 function setTxt(id, v) { const e = document.getElementById(id); if (e) e.textContent = v; }
-function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;'); }
 
 function setupSession() {
   function tick() {

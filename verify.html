@@ -2,6 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self';
+           script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com;
+           style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://fonts.gstatic.com;
+           font-src https://fonts.gstatic.com;
+           connect-src 'self' https://worldtimeapi.org;
+           img-src 'self' data: blob:;
+           object-src 'none';
+           base-uri 'self';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Blockchain Compliance Verification — DEMS</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -155,40 +164,12 @@ body {
           <td class="val mono" id="vReceipt">EXC-YYYY-NNNNN</td>
         </tr>
         <tr>
-          <td class="lbl">Timestamp (UTC)</td>
+          <td class="lbl">Transaction Date (UTC)</td>
           <td class="val" id="vTime">—</td>
         </tr>
         <tr>
           <td class="lbl">Transaction Type</td>
           <td class="val" id="vType">—</td>
-        </tr>
-        <tr>
-          <td class="lbl font-bold" style="color:var(--white);">Local Cash Volume</td>
-          <td class="val font-semibold" id="vPkr">₨ 0.00</td>
-        </tr>
-        <tr>
-          <td class="lbl">Exchange Rate</td>
-          <td class="val" id="vRate">0.000</td>
-        </tr>
-        <tr>
-          <td class="lbl font-bold" style="color:var(--blue);">Digital USDT Vol</td>
-          <td class="val font-semibold" style="color:var(--blue);" id="vUsdt">0.00 USDT</td>
-        </tr>
-        <tr>
-          <td class="lbl">Bank Name Detail</td>
-          <td class="val" id="vBankName">—</td>
-        </tr>
-        <tr>
-          <td class="lbl">Payment Ref ID</td>
-          <td class="val" id="vPaymentRef">—</td>
-        </tr>
-        <tr>
-          <td class="lbl">Block Hash (SHA-256)</td>
-          <td class="val mono" id="vHash" style="color:var(--green);">—</td>
-        </tr>
-        <tr>
-          <td class="lbl">Parent Block Hash</td>
-          <td class="val mono" id="vPrevHash">—</td>
         </tr>
       </tbody>
     </table>
@@ -265,22 +246,17 @@ async function runVerificationScan() {
     }
 
     // Parse parameters
+    // SEC-FIX 5: this is a PUBLIC page — only non-sensitive fields are
+    // rendered (receipt number, date, type, chain index, validity status).
+    // Amounts, rates, bank/payment details, and client PII are intentionally
+    // never written to the DOM here, even though they exist on `txn`.
     document.getElementById('vBlockIdx').textContent = `Block #${txn.chain_index}`;
     document.getElementById('vReceipt').textContent = txn.receipt_number;
-    document.getElementById('vTime').textContent = new Date(txn.timestamp).toUTCString();
-    
+    // Date only — no time-of-day — to avoid revealing granular activity timing.
+    document.getElementById('vTime').textContent = new Date(txn.timestamp).toISOString().split('T')[0];
+
     const isBuy = txn.txn_type === 'buy';
     document.getElementById('vType').innerHTML = `<span class="badge-type ${txn.txn_type}">${isBuy ? '📥 Buy (Client Sells USDT)' : '📤 Sell (Client Buys USDT)'}</span>`;
-    
-    document.getElementById('vPkr').textContent = `₨ ${parseFloat(txn.amount_pkr).toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-    document.getElementById('vRate').textContent = parseFloat(txn.exchange_rate).toFixed(3);
-    document.getElementById('vUsdt').textContent = `${parseFloat(txn.amount_usdt).toFixed(2)} USDT`;
-    
-    document.getElementById('vBankName').textContent = txn.bank_name ? `${txn.bank_name} ${txn.bank_last4 ? '(last 4: ' + txn.bank_last4 + ')' : ''}` : 'None';
-    document.getElementById('vPaymentRef').textContent = txn.payment_ref || 'None';
-    
-    document.getElementById('vHash').textContent = txn.hash.toUpperCase();
-    document.getElementById('vPrevHash').textContent = txn.prev_hash.toUpperCase();
 
     // ── CRYPTOGRAPHIC VALIDATION TRACE ──
     // Use the authoritative HashEngine routines (these already log to

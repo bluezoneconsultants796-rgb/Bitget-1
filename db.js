@@ -112,6 +112,18 @@ const DB = (() => {
       notes       TEXT DEFAULT ''
     );
 
+    -- ── SEC-FIX 2: Login Lockout (moved from localStorage) ──
+    -- Single-row table (id=1 always) tracking failed-login state.
+    -- Stored in SQLite so lockout survives incognito tabs and clears
+    -- of localStorage; auth.js is the sole writer.
+    CREATE TABLE IF NOT EXISTS login_lockout (
+      id           INTEGER PRIMARY KEY,
+      failed_count INTEGER NOT NULL DEFAULT 0,
+      lockout_until TEXT,
+      updated_at   TEXT NOT NULL
+    );
+    INSERT OR IGNORE INTO login_lockout (id, failed_count, updated_at) VALUES (1, 0, '');
+
     -- ── INDEXES for performance ──────────────────────────
     CREATE INDEX IF NOT EXISTS idx_txn_date    ON transactions(timestamp);
     CREATE INDEX IF NOT EXISTS idx_txn_type    ON transactions(txn_type);
@@ -164,6 +176,12 @@ const DB = (() => {
       localStorage.setItem(DB_KEY, btoa(binaryStr));
     } catch (e) {
       console.error('DB save error:', e);
+      if (e.name === 'QuotaExceededError' || (e.message && e.message.includes('quota'))) {
+        const banner = document.createElement('div');
+        banner.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:999999;display:flex;align-items:center;justify-content:center;flex-direction:column;color:#fff;font-family:sans-serif;padding:40px;text-align:center;';
+        banner.innerHTML = '<div style="font-size:48px;margin-bottom:16px;">🚨</div><h1 style="color:#ef4444;margin-bottom:16px;">STORAGE FULL — DATA NOT SAVED</h1><p style="max-width:500px;line-height:1.6;color:#fca5a5;">Browser storage is full. The last database changes were NOT persisted. Please go to Settings → Backup and create an encrypted backup immediately, then clear old data.</p><a href="backup.html" style="margin-top:24px;background:#ef4444;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:700;">Go to Backup Now</a>';
+        document.body.appendChild(banner);
+      }
     }
   }
 
@@ -401,6 +419,28 @@ const DB = (() => {
      */
     flush() {
       flushStorage();
+    },
+
+    /**
+     * transaction(fn)
+     * Wraps a sequence of DB writes in a single SQLite BEGIN/COMMIT so that
+     * multi-step operations (e.g. insert transaction + sync client + save
+     * attachment) either all succeed or all roll back together. If `fn`
+     * throws, the partial writes are rolled back and the error is re-thrown
+     * to the caller. On success, a single saveToStorage() is scheduled so
+     * the whole batch persists as one export rather than one per statement.
+     */
+    async transaction(fn) {
+      if (!_db) await this.init();
+      _db.run('BEGIN');
+      try {
+        await fn();
+        _db.run('COMMIT');
+        saveToStorage();
+      } catch (e) {
+        try { _db.run('ROLLBACK'); } catch {}
+        throw e;
+      }
     },
 
     /**
